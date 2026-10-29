@@ -1,0 +1,20 @@
+[package]
+name = "openps-metal"
+version.workspace = true
+edition.workspace = true
+description = "Metal presentation: MetalFX upscaling to 1440p/4K and motion-compensated frame extrapolation for 120/144 Hz, built for minimum latency"
+build = "build.rs"
+
+[dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+objc2-metal-fx = "0.3"
+objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer", "CATransaction"] }
+objc2-core-foundation = "0.3"
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef"] }
+openps-video = { path = "../openps-video" }
+
+[dev-dependencies]
+tempfile = "3"

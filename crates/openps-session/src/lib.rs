@@ -278,7 +278,11 @@ impl Handle {
 impl Drop for Handle {
     fn drop(&mut self) {
         // Best effort: end the session without blocking the caller. Threads exit on their own.
-        let _ = self.tx.send(Msg::Cmd(Command::Disconnect));
+        // the runner decrements `inbound` for every message it takes, so account for this one
+        self.shared.inbound.fetch_add(1, Ordering::Relaxed);
+        if self.tx.send(Msg::Cmd(Command::Disconnect)).is_err() {
+            self.shared.inbound.fetch_sub(1, Ordering::Relaxed);
+        }
         self.shared.stop.store(true, Ordering::Relaxed);
     }
 }

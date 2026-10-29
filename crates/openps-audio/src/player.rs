@@ -122,6 +122,18 @@ extern "C" fn on_buffer(user: *mut c_void, queue: AudioQueueRef, buf: AudioQueue
 impl Player {
     pub fn new(h: AudioHeader, cfg: PlayerConfig) -> Result<Self, PlayerError> {
         let per_ms = h.sample_rate as usize * h.channels as usize / 1000;
+        // sanitise: prefill <= target <= max, and never a zero-length device buffer
+        let cfg = {
+            let target_ms = cfg.target_ms.max(1);
+            let max_ms = cfg.max_ms.max(target_ms);
+            PlayerConfig {
+                prefill_ms: cfg.prefill_ms.min(target_ms),
+                target_ms,
+                max_ms,
+                buffer_ms: cfg.buffer_ms.max(1),
+                ..cfg
+            }
+        };
         let shared = Arc::new(Shared {
             ring: Mutex::new(Ring { buf: VecDeque::new(), started: false }),
             prefill: cfg.prefill_ms as usize * per_ms,

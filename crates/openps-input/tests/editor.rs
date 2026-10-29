@@ -46,14 +46,14 @@ fn editor_save_and_reload() {
     e.replace(b(Button::CROSS), &chord(&[k(Key::Z)]));
     e.add(a(Axis::L2), &chord(&[k(Key::LEFT_SHIFT), k(Key::X)]));
     e.clear(b(Button::TRIANGLE));
-    e.set_toggle("LEFT_CONTROL+F7");
+    e.set_toggle("LEFT_CONTROL+F5");
     let cfg = reload(&e);
     assert_eq!(cfg.bindings["CROSS"], vec!["Z"]);
     assert!(
         cfg.bindings["L2"].contains(&"LEFT_SHIFT+X".to_string())
             && cfg.bindings["L2"].contains(&"MOUSE_RIGHT".to_string())
     );
-    assert!(cfg.bindings["TRIANGLE"].is_empty() && cfg.toggle == "LEFT_CONTROL+F7");
+    assert!(cfg.bindings["TRIANGLE"].is_empty() && cfg.toggle == "LEFT_CONTROL+F5");
     e.reset(b(Button::CROSS));
     assert_eq!(e.bindings()["CROSS"], vec!["SPACE"]);
     assert_eq!(e.owners(&chord(&[k(Key::Q)]), None), vec!["SQUARE"]);
@@ -85,7 +85,7 @@ fn mouse_move_rows_shown_and_follow_config() {
 #[test]
 fn profiles_edit_and_save_only_diffs() {
     let (mut e, _d) = ed();
-    assert_eq!(e.profile_names(), vec!["default", "racing"]);
+    assert_eq!(e.profile_names(), vec!["default", "racing", "assassins_creed"]);
     assert_eq!(e.next_profile(), "racing");
     assert_eq!(e.slot(a(Axis::R2), 1), "UP_ARROW");
     e.set_slot(a(Axis::R2), 1, &chord(&[k(Key::Z)])); // change racing only
@@ -121,7 +121,7 @@ fn add_defaults_to_a_copy_of_the_base() {
 #[test]
 fn add_rejects_bad_or_duplicate_names() {
     let (mut e, _d) = ed();
-    for name in ["", "has space", "a.b", &"x".repeat(40), "racing", "RACING", "default", "Default"] {
+    for name in ["", "   ", "racing", "RACING", "Racing", "default", "Default"] {
         assert!(e.add_profile(name, None).is_err(), "{name:?}");
     }
 }
@@ -147,9 +147,10 @@ fn delete_a_shipped_profile_stays_deleted_after_reload() {
     let (mut e, _d) = ed();
     e.delete_profile("racing").unwrap();
     let cfg = reload(&e);
-    assert_eq!(cfg.profile_names(), vec!["default"]);
+    assert_eq!(cfg.profile_names(), vec!["default", "assassins_creed"]);
     assert_eq!(cfg.deleted_profiles, vec!["racing"]);
-    assert_eq!(Editor::new(&e.path).unwrap().profile_names(), vec!["default"]); // and the editor agrees on re-open
+    assert_eq!(Editor::new(&e.path).unwrap().profile_names(), vec!["default", "assassins_creed"]);
+    // and the editor agrees on re-open
 }
 
 #[test]
@@ -181,22 +182,24 @@ fn rename_a_shipped_profile_keeps_its_bindings_and_removes_the_old_name() {
     let (mut e, _d) = ed();
     e.rename_profile("racing", "rally").unwrap();
     let cfg = reload(&e);
-    assert_eq!(cfg.profile_names(), vec!["default", "rally"]);
+    assert_eq!(cfg.profile_names(), vec!["default", "assassins_creed", "rally"]);
     assert_eq!(cfg.profile_bindings("rally")["R2"][0], "UP_ARROW");
-    assert_eq!(cfg.profile_bindings("rally")["RIGHT_STICK_UP"], vec!["W"]);
+    assert_eq!(cfg.profile_bindings("rally")["RIGHT_STICK_UP"], vec!["LEFT_OPTION+UP_ARROW"]);
     assert!(!Editor::new(&e.path).unwrap().profile_names().contains(&"racing".to_string()));
 }
 
 #[test]
 fn rename_the_base_profile() {
     let (mut e, _d) = ed();
+    e.add_profile("inherit", None).unwrap();
     e.rename_profile("default", "fps").unwrap();
+    e.set_current("fps");
     e.replace(b(Button::CROSS), &chord(&[k(Key::X)])); // edits the base (now called fps)
     let cfg = reload(&e);
     assert_eq!(cfg.default_name, "fps");
     assert_eq!(cfg.profile_bindings("fps")["CROSS"], vec!["X"]);
     assert_eq!(Editor::new(&e.path).unwrap().current(), "fps");
-    assert_eq!(cfg.profile_bindings("racing")["CROSS"], vec!["X"]); // other profiles still inherit it
+    assert_eq!(cfg.profile_bindings("inherit")["CROSS"], vec!["X"]); // other profiles still inherit it
 }
 
 #[test]
@@ -216,14 +219,14 @@ fn rename_keeps_the_current_selection_and_order() {
     e.set_current("racing");
     e.rename_profile("racing", "rally").unwrap();
     assert_eq!(e.current(), "rally");
-    assert_eq!(e.profile_names(), vec!["default", "rally", "temp"]);
+    assert_eq!(e.profile_names(), vec!["default", "rally", "assassins_creed", "temp"]);
 }
 
 #[test]
 fn rename_validates_the_new_name() {
     let (mut e, _d) = ed();
     e.add_profile("temp", None).unwrap();
-    for new in ["", "bad name", "default", "racing"] {
+    for new in ["", "  ", "default", "racing", "Racing"] {
         assert!(e.rename_profile("temp", new).is_err(), "{new:?}");
     }
 }
@@ -232,7 +235,7 @@ fn rename_validates_the_new_name() {
 fn rename_to_the_same_name_is_a_no_op() {
     let (mut e, _d) = ed();
     e.rename_profile("racing", "racing").unwrap();
-    assert_eq!(e.profile_names(), vec!["default", "racing"]);
+    assert_eq!(e.profile_names(), vec!["default", "racing", "assassins_creed"]);
     assert!(e.deleted().is_empty());
 }
 
@@ -256,9 +259,9 @@ fn a_complex_session_round_trips() {
     e.add_profile("temp", None).unwrap();
     e.delete_profile("temp").unwrap();
     let cfg = reload(&e);
-    assert_eq!(cfg.profile_names(), vec!["fps", "rally", "night"]);
+    assert_eq!(cfg.profile_names(), vec!["fps", "assassins_creed", "rally", "night"]);
     let again = Editor::new(&e.path).unwrap();
-    assert_eq!(again.profile_names(), vec!["fps", "rally", "night"]);
+    assert_eq!(again.profile_names(), vec!["fps", "assassins_creed", "rally", "night"]);
     assert_eq!(again.profile("night").unwrap()["CROSS"], vec!["X"]);
     assert_eq!(again.profile("night").unwrap()["R2"][0], "UP_ARROW");
 }
@@ -288,24 +291,28 @@ fn a_bad_option_is_rejected_without_touching_the_file() {
 #[test]
 fn editing_the_base_updates_inheriting_profiles_but_not_overridden_ones() {
     let (mut e, _d) = ed();
-    e.replace(b(Button::CROSS), &chord(&[k(Key::X)])); // racing inherits CROSS, overrides R2
-    assert_eq!(e.profile("racing").unwrap()["CROSS"], vec!["X"]);
-    e.set_current("racing");
-    e.replace(b(Button::SQUARE), &chord(&[k(Key::Y)])); // racing-only override
+    e.add_profile("inherit", None).unwrap(); // a profile with nothing of its own
     e.set_current("default");
-    e.replace(b(Button::SQUARE), &chord(&[k(Key::Z)])); // base changes SQUARE: racing keeps its own
-    assert_eq!(e.profile("racing").unwrap()["SQUARE"], vec!["Y"]);
+    e.replace(b(Button::CROSS), &chord(&[k(Key::X)])); // inherit inherits CROSS
+    assert_eq!(e.profile("inherit").unwrap()["CROSS"], vec!["X"]);
+    e.set_current("inherit");
+    e.replace(b(Button::SQUARE), &chord(&[k(Key::Y)])); // inherit-only override
+    e.set_current("default");
+    e.replace(b(Button::SQUARE), &chord(&[k(Key::Z)])); // base changes SQUARE: inherit keeps its own
+    assert_eq!(e.profile("inherit").unwrap()["SQUARE"], vec!["Y"]);
     let cfg = reload(&e);
-    assert_eq!(cfg.profile_bindings("racing")["CROSS"], vec!["X"]);
-    assert_eq!(cfg.profile_bindings("racing")["SQUARE"], vec!["Y"]);
-    assert!(!cfg.profiles["racing"].bindings.contains_key("CROSS")); // still inherited, not frozen
+    assert_eq!(cfg.profile_bindings("inherit")["CROSS"], vec!["X"]);
+    assert_eq!(cfg.profile_bindings("inherit")["SQUARE"], vec!["Y"]);
+    assert!(!cfg.profiles["inherit"].bindings.contains_key("CROSS")); // still inherited, not frozen
 }
 
 #[test]
 fn clearing_a_base_binding_reaches_inheriting_profiles() {
     let (mut e, _d) = ed();
+    e.add_profile("inherit", None).unwrap();
+    e.set_current("default");
     e.clear_slot(b(Button::L1), 2);
-    assert_eq!(e.profile("racing").unwrap()["L1"], vec!["1"]);
+    assert_eq!(e.profile("inherit").unwrap()["L1"], vec!["1"]);
 }
 
 #[test]
@@ -384,4 +391,30 @@ fn old_files_with_reserved_bindings_are_migrated_with_notes_and_not_written_back
     assert_eq!(e.notes.len(), 1);
     e.save().unwrap();
     assert_eq!(load_path(&path, false).unwrap().bindings["CROSS"], vec!["Z"]); // strict load now passes
+}
+
+#[test]
+fn a_typed_name_is_converted_and_a_renamed_profile_keeps_its_id() {
+    let (mut e, _d) = ed();
+    e.add_profile("Night Drive", Some("racing")).unwrap();
+    assert!(e.profile_names().contains(&"night_drive".to_string()));
+    let id = e.profile_id("night_drive").unwrap();
+    e.rename_profile("night_drive", "Late Night!").unwrap();
+    assert_eq!(e.profile_id("late_night"), Some(id.clone()));
+    assert_eq!(e.profile_id("night_drive"), None);
+    e.save().unwrap();
+    let cfg = load_path(&e.path, true).unwrap();
+    assert_eq!(cfg.id_of("late_night"), Some(id.clone()));
+    assert_eq!(cfg.name_of_id(&id).as_deref(), Some("late_night"));
+    // a shipped profile renamed keeps the shipped id; a deleted one frees its id
+    e.rename_profile("racing", "rally").unwrap();
+    assert_eq!(e.profile_id("rally").as_deref(), Some("p_3a1f0c01"));
+    e.delete_profile("rally").unwrap();
+    e.save().unwrap();
+    let cfg = load_path(&e.path, true).unwrap();
+    assert_eq!(cfg.name_of_id("p_3a1f0c01"), None);
+    // two new profiles never share an id
+    e.add_profile("a1", None).unwrap();
+    e.add_profile("a2", None).unwrap();
+    assert_ne!(e.profile_id("a1"), e.profile_id("a2"));
 }

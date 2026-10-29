@@ -160,12 +160,21 @@ pub struct Console {
     pub addr: IpAddr,
 }
 
+const MAX_FIELD_CHARS: usize = 64;
+/// Most distinct consoles one scan will report (a LAN host can otherwise flood the list).
+pub const MAX_CONSOLES: usize = 64;
+
+/// Strip control characters and cap the length of a console-supplied display string.
+fn sanitize(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).take(MAX_FIELD_CHARS).collect()
+}
+
 /// Build a [`Console`] from a discovery response. Requires a known `host-type` and a `host-id`.
 pub fn console_from_response(resp: &Response, from: IpAddr) -> Option<Console> {
     Some(Console {
         device: DeviceType::from_host_type(resp.fields.get("host-type")?)?,
-        host_id: resp.fields.get("host-id")?.clone(),
-        host_name: resp.fields.get("host-name").cloned().unwrap_or_default(),
+        host_id: sanitize(resp.fields.get("host-id")?),
+        host_name: resp.fields.get("host-name").map(|n| sanitize(n)).unwrap_or_default(),
         status: Status::from_code(resp.code),
         addr: from,
     })
@@ -214,6 +223,12 @@ pub fn scan(opts: &ScanOptions) -> io::Result<Vec<Console>> {
     let sock = broadcast_socket()?;
     let mut found: BTreeMap<String, Console> = BTreeMap::new();
     let mut buf = [0u8; 2048];
+    // For a purely unicast scan only the probed hosts may answer.
+    let unicast_only = opts.targets.iter().all(|t| match t {
+        IpAddr::V4(a) => !a.is_broadcast() && !a.is_multicast() && !a.octets().ends_with(&[255]),
+        IpAddr::V6(_) => true,
+    });
+    let targets = opts.targets.clone();
     let mut collect = |sock: &UdpSocket, until: Instant, found: &mut BTreeMap<String, Console>| -> io::Result<()> {
         loop {
             let now = Instant::now();
@@ -223,8 +238,13 @@ pub fn scan(opts: &ScanOptions) -> io::Result<Vec<Console>> {
             sock.set_read_timeout(Some((until - now).max(Duration::from_millis(1))))?;
             match sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
+                    if unicast_only && !targets.contains(&from.ip()) {
+                        continue;
+                    }
                     if let Some(c) = parse_response(&buf[..n]).and_then(|r| console_from_response(&r, from.ip())) {
-                        found.insert(c.host_id.clone(), c);
+                        if found.len() < MAX_CONSOLES || found.contains_key(&c.host_id) {
+                            found.insert(c.host_id.clone(), c);
+                        }
                     }
                 }
                 Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Ok(()),
@@ -233,16 +253,26 @@ pub fn scan(opts: &ScanOptions) -> io::Result<Vec<Console>> {
             }
         }
     };
+    let (mut attempted, mut failed, mut last_err) = (0u32, 0u32, None);
     for round in 0..opts.sends.max(1) {
         for dt in &opts.devices {
             for target in &opts.targets {
                 let dest = SocketAddr::new(*target, opts.port_override.unwrap_or(dt.port()));
                 // an unreachable target must not abort the whole scan
-                let _ = sock.send_to(&search_packet(*dt), dest);
+                attempted += 1;
+                if let Err(e) = sock.send_to(&search_packet(*dt), dest) {
+                    failed += 1;
+                    last_err = Some(e);
+                }
             }
         }
         let wait = if round + 1 < opts.sends.max(1) { opts.send_interval } else { opts.listen };
         collect(&sock, Instant::now() + wait, &mut found)?;
+    }
+    if attempted > 0 && failed == attempted && found.is_empty() {
+        if let Some(e) = last_err {
+            return Err(e); // every send failed (e.g. an IPv6 target on the IPv4 socket): say so
+        }
     }
     Ok(found.into_values().collect())
 }
@@ -286,7 +316,7 @@ pub fn wait_until_ready(
             port_override,
             ..Default::default()
         };
-        if scan(&opts)?.iter().any(|c| c.status == Status::Ready && c.device == dt) {
+        if scan(&opts)?.iter().any(|c| c.status == Status::Ready && c.device == dt && c.addr == target) {
             return Ok(true);
         }
     }

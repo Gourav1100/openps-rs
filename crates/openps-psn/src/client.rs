@@ -38,6 +38,14 @@ impl<H: HttpClient, S: SecretStore> PsnClient<H, S> {
         &self.cfg
     }
 
+    /// The HTTP client and secret store, for the PSN API (`crate::api`), which shares them.
+    pub fn http(&self) -> &H {
+        &self.http
+    }
+    pub fn secrets(&self) -> &S {
+        &self.store
+    }
+
     fn call(&self, req: &crate::http::HttpRequest) -> Result<HttpResponse, PsnError> {
         self.http.execute(req).map_err(network)
     }
@@ -46,7 +54,7 @@ impl<H: HttpClient, S: SecretStore> PsnClient<H, S> {
         let s = Stored {
             access_token: t.access_token.clone(),
             refresh_token: t.refresh_token.clone(),
-            expires_at: t.expires_in.map(|e| now + e),
+            expires_at: t.expires_in.map(|e| now.saturating_add(e)),
         };
         self.store.set(TOKENS_KEY, &serde_json::to_string(&s).expect("serialisable")).map_err(PsnError::Network)
     }
@@ -61,10 +69,10 @@ impl<H: HttpClient, S: SecretStore> PsnClient<H, S> {
 
     /// A valid access token, refreshing (and persisting) first if it is about to expire. `None` if not logged in.
     pub fn access_token(&self, now: u64) -> Result<Option<String>, PsnError> {
-        let Some(stored) = self.store.get(TOKENS_KEY).and_then(|j| serde_json::from_str::<Stored>(&j).ok()) else {
+        let Some(stored) = self.load() else {
             return Ok(None);
         };
-        let expiring = stored.expires_at.is_some_and(|e| now + REFRESH_MARGIN_S >= e);
+        let expiring = stored.expires_at.is_some_and(|e| now.saturating_add(REFRESH_MARGIN_S) >= e);
         if !expiring {
             return Ok(Some(stored.access_token));
         }
@@ -77,7 +85,16 @@ impl<H: HttpClient, S: SecretStore> PsnClient<H, S> {
                 self.persist(&t, now)?;
                 Ok(Some(t.access_token))
             }
+            // A 403 is as likely a portal/WAF/rate limiter as a dead token: keep the login.
+            Err(PsnError::Rejected { status: 403 }) => Err(PsnError::Unavailable { status: 403 }),
             Err(PsnError::Rejected { .. }) => {
+                // Compare-and-delete: if another caller already rotated the refresh token while ours was in flight,
+                // the stored login is the winner's. Use it instead of wiping it.
+                if let Some(cur) = self.load() {
+                    if cur.refresh_token.as_deref() != Some(rt.as_str()) {
+                        return Ok(Some(cur.access_token));
+                    }
+                }
                 self.logout()?; // the refresh token is dead: forget it so the UI asks for a new login
                 Ok(None)
             }
@@ -85,8 +102,13 @@ impl<H: HttpClient, S: SecretStore> PsnClient<H, S> {
         }
     }
 
+    fn load(&self) -> Option<Stored> {
+        self.store.get(TOKENS_KEY).and_then(|j| serde_json::from_str::<Stored>(&j).ok())
+    }
+
+    /// Whether a usable (parseable) login is stored.
     pub fn is_logged_in(&self) -> bool {
-        self.store.get(TOKENS_KEY).is_some()
+        self.load().is_some()
     }
 
     pub fn logout(&self) -> Result<(), PsnError> {

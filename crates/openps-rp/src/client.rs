@@ -19,13 +19,20 @@ pub struct Timeouts {
     pub connect: Duration,
     /// Per read/write on the socket (the app uses 20 s).
     pub io: Duration,
+    /// Total time allowed for one HTTP exchange (send + whole reply); the retry loop is capped at 3x this.
+    pub total: Duration,
     /// Pause before retrying a failed init (the app uses 2 s).
     pub retry_delay: Duration,
 }
 
 impl Default for Timeouts {
     fn default() -> Self {
-        Self { connect: Duration::from_secs(5), io: Duration::from_secs(20), retry_delay: Duration::from_secs(2) }
+        Self {
+            connect: Duration::from_secs(5),
+            io: Duration::from_secs(20),
+            total: Duration::from_secs(30),
+            retry_delay: Duration::from_secs(2),
+        }
     }
 }
 
@@ -46,7 +53,13 @@ impl std::fmt::Display for ClientError {
             ClientError::Io(e) => write!(f, "network error: {e}"),
             ClientError::Http(e) => write!(f, "bad HTTP response: {e}"),
             ClientError::Register(RegisterError::Rejected { status, reason }) => {
-                write!(f, "registration rejected (HTTP {status}): {}", regist::reason_text(reason))
+                let reason = &session::clean_reason(reason);
+                let code = if reason.is_empty() { String::new() } else { format!(", code {reason}") };
+                write!(f, "registration rejected (HTTP {status}{code}): {}", regist::reason_text(reason))?;
+                match regist::rejection_hint(*status, reason) {
+                    "" => Ok(()),
+                    hint => write!(f, ". {hint}"),
+                }
             }
             ClientError::Register(e) => write!(f, "registration failed: {e:?}"),
             ClientError::Init(e) => write!(f, "session init failed: {e:?}"),
@@ -76,8 +89,17 @@ fn resolve(host: &str, port: u16) -> io::Result<SocketAddr> {
     (host, port).to_socket_addrs()?.next().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))
 }
 
-fn exchange(stream: &mut TcpStream, req: &Request, nl: NoLength) -> Result<(http::Response, Vec<u8>), ClientError> {
-    http::exchange(stream, req, nl).map_err(|e| {
+fn exchange(
+    stream: &mut TcpStream,
+    req: &Request,
+    nl: NoLength,
+    t: &Timeouts,
+) -> Result<(http::Response, Vec<u8>), ClientError> {
+    let io = t.io;
+    http::exchange_until(stream, req, nl, Some(Instant::now() + t.total), |s, left| {
+        s.set_read_timeout(Some(left.min(io).max(Duration::from_millis(1))))
+    })
+    .map_err(|e| {
         if e.kind() == io::ErrorKind::InvalidData {
             ClientError::Http(e.to_string())
         } else {
@@ -97,7 +119,7 @@ pub fn register(
 ) -> Result<Registered, ClientError> {
     let built = regist::build_request(t, p, host, rng);
     let mut stream = connect(resolve(host, port)?, timeouts)?;
-    let (resp, _) = exchange(&mut stream, &built.request, NoLength::UntilClose)?;
+    let (resp, _) = exchange(&mut stream, &built.request, NoLength::UntilClose, timeouts)?;
     regist::parse_response(&built.cipher, &resp).map_err(ClientError::Register)
 }
 
@@ -130,13 +152,21 @@ fn init_with_retries(p: &OpenParams, timeouts: &Timeouts) -> Result<([u8; 16], S
     let addr = resolve(p.host, p.port)?;
     let mut version = p.version.to_string();
     let (mut again_left, mut io_left) = (2u32, 5u32);
+    let give_up_at = Instant::now() + timeouts.total.saturating_mul(3);
     loop {
+        if Instant::now() >= give_up_at {
+            return Err(ClientError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "session init retries exceeded the total deadline",
+            )));
+        }
         let result: Result<[u8; 16], ClientError> = (|| {
             let mut s = connect(addr, timeouts)?;
             let (resp, _) = exchange(
                 &mut s,
                 &session::init_request(p.host, &p.registration.regist_key, &version),
                 NoLength::UntilClose,
+                timeouts,
             )?;
             session::parse_init_response(&resp).map_err(ClientError::Init)
         })();
@@ -180,7 +210,7 @@ pub fn open_session(
     };
     let (req, mut state) = session::ctrl_request(t, &cp, &nonce, rng).map_err(|_| ClientError::BadKey)?;
     let mut stream = connect(resolve(p.host, p.port)?, timeouts)?;
-    let (resp, leftover) = exchange(&mut stream, &req, NoLength::Empty)?; // binary frames follow the headers
+    let (resp, leftover) = exchange(&mut stream, &req, NoLength::Empty, timeouts)?; // binary frames follow the headers
     let info = session::parse_ctrl_response(&mut state, p.device, &resp).map_err(ClientError::Ctrl)?;
     let CtrlState { cipher, out_counter, in_counter } = state;
     let mut rx = CtrlRx::new(cipher.clone(), in_counter);

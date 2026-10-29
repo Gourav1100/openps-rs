@@ -1,0 +1,13 @@
+[package]
+name = "openps-macinput"
+version.workspace = true
+edition.workspace = true
+description = "Keyboard/mouse input for the stream window: DOM events and CoreGraphics deltas feed the Con2PC engine (no Accessibility permission needed)"
+build = "build.rs"
+
+[dependencies]
+openps-input = { path = "../openps-input" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

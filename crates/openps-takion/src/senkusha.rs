@@ -142,10 +142,14 @@ pub fn rtt_ms(samples_ns: &[i64]) -> Option<i32> {
     if samples_ns.is_empty() {
         return None;
     }
-    let n = samples_ns.len() as i64;
-    let mean = samples_ns.iter().sum::<i64>() / n;
-    let var = samples_ns.iter().map(|x| ((x - mean) as f64).powi(2) as i64).sum::<i64>() / n;
-    let mut kept: Vec<i64> = samples_ns.iter().copied().filter(|x| (x - mean).abs() <= 2 * var).collect();
+    // i128 and saturating sums: hostile/huge samples must not overflow (debug panic / release wrap)
+    let n = samples_ns.len() as i128;
+    let mean = samples_ns.iter().map(|&x| i128::from(x)).sum::<i128>() / n;
+    let var =
+        samples_ns.iter().map(|&x| ((i128::from(x) - mean) as f64).powi(2) as i128).fold(0i128, i128::saturating_add)
+            / n;
+    let limit = var.saturating_mul(2);
+    let mut kept: Vec<i64> = samples_ns.iter().copied().filter(|&x| (i128::from(x) - mean).abs() <= limit).collect();
     kept.sort_unstable();
     if kept.len() > 2 {
         kept.remove(0);
@@ -154,7 +158,7 @@ pub fn rtt_ms(samples_ns: &[i64]) -> Option<i32> {
     if kept.is_empty() {
         return None;
     }
-    Some((kept.iter().sum::<i64>() / kept.len() as i64 / 1_000_000) as i32)
+    Some((kept.iter().map(|&x| i128::from(x)).sum::<i128>() / kept.len() as i128 / 1_000_000) as i32)
 }
 
 /// Timeout for the MTU probes: 5 x RTT, 10 ms if that is below 5, never above 500.

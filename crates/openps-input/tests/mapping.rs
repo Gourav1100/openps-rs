@@ -81,9 +81,9 @@ fn parse_names() {
 
 #[test]
 fn user_config_chords_and_combos() {
-    let mut c = user("toggle = \"LEFT_CONTROL+F7\"\n[bindings]\nTRIANGLE = [\"LEFT_SHIFT+Q\"]\nCROSS = [\"Z\"]\n[[combos]]\ninput = \"LEFT_OPTION+E\"\noutput = [\"L1\", \"CIRCLE\"]\n");
+    let mut c = user("toggle = \"LEFT_CONTROL+F5\"\n[bindings]\nTRIANGLE = [\"LEFT_SHIFT+Q\"]\nCROSS = [\"Z\"]\n[[combos]]\ninput = \"LEFT_OPTION+E\"\noutput = [\"L1\", \"CIRCLE\"]\n");
     c.output.min_press_ms = 0.0;
-    assert_eq!(c.toggle_chord().unwrap(), [k(Key::LEFT_CONTROL), k(Key::F7)].into_iter().collect());
+    assert_eq!(c.toggle_chord().unwrap(), [k(Key::LEFT_CONTROL), k(Key::F5)].into_iter().collect());
     let mut m = Mapper::new(c, None).unwrap();
     assert!(m.map(&snap(&[k(Key::Z)]), 0.0).buttons.contains(&Button::CROSS));
     assert!(!m.map(&snap(&[k(Key::SPACE)]), 0.0).buttons.contains(&Button::CROSS)); // default replaced
@@ -182,15 +182,18 @@ fn touchpad_click_and_tap_bindings() {
 #[test]
 fn racing_profile_layout() {
     let c = cfg();
-    assert_eq!(c.profile_names(), vec!["default", "racing"]);
+    assert_eq!(c.profile_names(), vec!["default", "racing", "assassins_creed"]);
     let mut m = Mapper::new(c, Some("racing")).unwrap();
     let st = m.map(&snap(&[k(Key::UP_ARROW), k(Key::RIGHT_ARROW)]), 0.0);
     assert!(st.r2 == 1.0 && st.left_x == 1.0 && st.right_y == 0.0);
     assert_eq!(m.map(&snap(&[k(Key::DOWN_ARROW)]), 0.1).l2, 1.0);
     assert_eq!(m.map(&snap(&[k(Key::S)]), 0.2).left_y, 0.0);
+    // W/A/S/D is the D-pad here, and Option+arrows move the camera
     let st = m.map(&snap(&[k(Key::D)]), 0.25);
-    assert!(st.left_x == 0.0 && st.right_x > 0.0 && st.right_x < 1.0);
-    assert_eq!(m.map(&snap(&[k(Key::D)]), 0.5).right_x, 1.0);
+    assert!(st.buttons.contains(&Button::DPAD_RIGHT) && st.right_x == 0.0);
+    let st = m.map(&snap(&[k(Key::LEFT_OPTION), k(Key::RIGHT_ARROW)]), 0.3);
+    assert!(st.right_x > 0.0 && st.right_x < 1.0);
+    assert_eq!(m.map(&snap(&[k(Key::LEFT_OPTION), k(Key::RIGHT_ARROW)]), 0.6).right_x, 1.0);
 }
 
 #[test]
@@ -210,7 +213,7 @@ fn profile_merge_and_validation() {
     let c = user("[profiles.racing.bindings]\nCROSS = [\"Z\"]\n[profiles.drift.bindings]\nL1 = [\"Q\"]\n");
     assert_eq!(c.profile_bindings("racing")["CROSS"], vec!["Z"]);
     assert_eq!(c.profile_bindings("racing")["R2"][0], "UP_ARROW"); // shipped override survives
-    assert_eq!(c.profile_names(), vec!["default", "racing", "drift"]);
+    assert_eq!(c.profile_names(), vec!["default", "racing", "assassins_creed", "drift"]);
     assert!(load_layers(Some("[profiles.default.bindings]\nCROSS = [\"Z\"]\n"), false).is_err());
 }
 
@@ -471,10 +474,9 @@ fn toggle_reports_events_and_survives_a_profile_switch() {
 #[test]
 fn bumper_mode_applies_to_the_current_profiles_trigger_binding() {
     let mut m = mapper();
-    m.set_profile("racing").unwrap();
+    m.set_profile("default").unwrap(); // the base profile has the click on R2
     toggle_click(&mut m, L, 0.0);
     assert!(m.map(&snap(&[L]), 1.0).buttons.contains(&Button::R1));
-    assert_eq!(m.map(&snap(&[k(Key::UP_ARROW)]), 2.0).r2, 1.0);
 }
 
 fn settle(m: &mut Mapper, frames: Vec<(f64, InputSnapshot)>) -> ControllerState {
@@ -568,7 +570,7 @@ fn reserved_and_tab_click_bindings_are_rejected() {
     assert!(load_layers(Some("[bindings]\nCROSS = [\"F10\"]\n"), false).is_err()); // hotkey
     assert!(load_layers(Some("[bindings]\nCROSS = [\"LEFT_COMMAND\"]\n"), false).is_err());
     assert!(load_layers(Some("[bindings]\nCROSS = [\"TAB+MOUSE_LEFT\"]\n"), false).is_err());
-    assert!(load_layers(Some("toggle = \"F11\"\n"), false).is_err()); // overlaps profile_key
+    assert!(load_layers(Some("toggle = \"F7\"\n"), false).is_err()); // overlaps profile_key
 }
 
 #[test]
@@ -582,7 +584,7 @@ fn migration_drops_now_reserved_bindings_with_notes() {
 #[test]
 fn deleted_profiles_and_use_defaults_false() {
     let c = user("deleted_profiles = [\"racing\"]\n");
-    assert_eq!(c.profile_names(), vec!["default"]);
+    assert_eq!(c.profile_names(), vec!["default", "assassins_creed"]);
 }
 
 #[test]

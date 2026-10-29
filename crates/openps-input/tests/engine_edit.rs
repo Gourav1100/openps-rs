@@ -389,7 +389,7 @@ fn adding_a_profile_copies_the_current_one_and_starts_a_rename() {
     r.ui(serde_json::json!({"type": "profile_add"}));
     assert_eq!(r.e.profile(), "profile1");
     assert!(r.e.renaming());
-    assert_eq!(r.saved().profile_names(), vec!["default", "racing", "profile1"]);
+    assert_eq!(r.saved().profile_names(), vec!["default", "racing", "assassins_creed", "profile1"]);
 }
 
 #[test]
@@ -434,7 +434,7 @@ fn typing_replaces_the_old_name_and_enter_saves() {
     assert_eq!(r.last().renaming.unwrap().text, "rally"); // not "racingrally"
     r.feed(&plain(&[Key::RETURN]));
     assert!(!r.e.renaming());
-    assert_eq!(r.saved().profile_names(), vec!["default", "rally"]);
+    assert_eq!(r.saved().profile_names(), vec!["default", "assassins_creed", "rally"]);
     assert_eq!(r.saved().profile_bindings("rally")["R2"][0], "UP_ARROW"); // bindings came along
 }
 
@@ -497,7 +497,7 @@ fn escape_cancels_a_rename_without_saving_and_enter_without_typing_keeps_the_nam
     assert!(r.notice().contains("Rename cancelled"));
     rename(&mut r, "racing");
     r.feed(&plain(&[Key::RETURN]));
-    assert!(!r.e.renaming() && r.e.cfg.profile_names() == vec!["default", "racing"]);
+    assert!(!r.e.renaming() && r.e.cfg.profile_names() == vec!["default", "racing", "assassins_creed"]);
 }
 
 #[test]
@@ -511,7 +511,7 @@ fn clashing_or_empty_names_are_rejected_with_a_reason() {
             r.feed(&plain(&keys));
         }
         r.feed(&plain(&[Key::RETURN]));
-        assert_eq!(r.e.cfg.profile_names(), vec!["default", "racing"]);
+        assert_eq!(r.e.cfg.profile_names(), vec!["default", "racing", "assassins_creed"]);
         assert!(r.notice().starts_with("Rejected"), "{}", r.notice());
     }
 }
@@ -587,6 +587,16 @@ fn overlay_state_carries_opacity_slots_rows_and_hotkeys() {
     );
     assert_eq!(s.rows.len(), 17 + 10 + 5);
     assert!(s.hotkeys.iter().any(|(k, t)| k == "Cmd+F1-F6" && t == "pick profile"));
-    assert!(s.hotkeys.iter().any(|(_, t)| t == "PANIC: kill openPS"));
+    assert!(s.hotkeys.iter().any(|(_, t)| t == "PANIC: kill OpenPS"));
     assert_eq!(s.mouse[0], ("MOUSE_MOVE_UP".to_string(), "RIGHT_STICK_UP".to_string()));
+}
+
+#[test]
+fn a_new_profile_can_start_as_a_copy_of_any_existing_one() {
+    let mut r = Rig::new();
+    r.ui(serde_json::json!({ "type": "profile_add", "source": "racing" }));
+    assert!(r.e.renaming(), "naming starts right away");
+    let racing = r.e.cfg.profile_bindings("racing");
+    let created = r.e.cfg.profile_names().pop().unwrap();
+    assert_eq!(r.e.cfg.profile_bindings(&created), racing, "a copy of racing, not of the profile that was selected");
 }

@@ -3,6 +3,7 @@
 //! sending binary frames right after the headers, so the exchange hands back any bytes read past the response.
 
 use std::io::{self, Read, Write};
+use std::time::Instant;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Request {
@@ -31,10 +32,13 @@ impl Request {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 
+    /// Serialise. CR, LF and NUL are stripped from every spliced string so a hostile host/value cannot inject
+    /// header lines.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = format!("{} {} HTTP/1.1\r\n", self.method, self.path).into_bytes();
+        let clean = |s: &str| -> String { s.chars().filter(|c| !matches!(c, '\r' | '\n' | '\0')).collect() };
+        let mut out = format!("{} {} HTTP/1.1\r\n", clean(&self.method), clean(&self.path)).into_bytes();
         for (k, v) in &self.headers {
-            out.extend(format!("{k}: {v}\r\n").bytes());
+            out.extend(format!("{}: {}\r\n", clean(k), clean(v)).bytes());
         }
         if !self.body.is_empty() && self.get_header("Content-Length").is_none() {
             out.extend(format!("Content-Length: {}\r\n", self.body.len()).bytes());
@@ -126,6 +130,18 @@ pub fn exchange<S: Read + Write>(
     req: &Request,
     no_length: NoLength,
 ) -> io::Result<(Response, Vec<u8>)> {
+    exchange_until(stream, req, no_length, None, |_, _| Ok(()))
+}
+
+/// Like [`exchange`] with a total `deadline`: before every read `set_read_timeout` is told how long is left, and
+/// the call fails with `TimedOut` once the deadline has passed (a peer dripping bytes cannot hold it forever).
+pub fn exchange_until<S: Read + Write>(
+    stream: &mut S,
+    req: &Request,
+    no_length: NoLength,
+    deadline: Option<Instant>,
+    set_read_timeout: impl Fn(&mut S, std::time::Duration) -> io::Result<()>,
+) -> io::Result<(Response, Vec<u8>)> {
     stream.write_all(&req.to_bytes())?;
     stream.flush()?;
     let mut buf = vec![];
@@ -135,6 +151,16 @@ pub fn exchange<S: Read + Write>(
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?
         {
             return Ok((resp, buf[used..].to_vec()));
+        }
+        if let Some(d) = deadline {
+            let left = d.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "console HTTP exchange exceeded its total deadline",
+                ));
+            }
+            set_read_timeout(stream, left)?;
         }
         let n = stream.read(&mut chunk)?;
         if n == 0 {

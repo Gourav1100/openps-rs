@@ -103,6 +103,11 @@ pub fn validate_host(host: &str) -> Result<(), String> {
     }
 }
 
+/// The one stored form of an address: an IPv6 literal without brackets (what `IpAddr::parse` and the resolver understand).
+pub fn canonical_host(host: &str) -> String {
+    host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host).to_string()
+}
+
 /// Protocol versions the registration step speaks. The value is sent in an HTTP header, so it must never be free text.
 pub fn validate_version(v: &str) -> Result<(), String> {
     if matches!(v, "1.0" | "10.0" | "9.0" | "8.0") {
@@ -117,7 +122,7 @@ pub fn validate_version(v: &str) -> Result<(), String> {
 pub fn clean_text(s: &str, max_chars: usize) -> String {
     let invisible = |c: char| {
         c.is_control()
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{2028}' | '\u{2029}' | '\u{061C}' | '\u{180E}' | '\u{00AD}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E007F}')
     };
     s.chars().filter(|c| !invisible(*c)).collect::<String>().trim().chars().take(max_chars).collect()
 }
@@ -170,6 +175,79 @@ pub struct StreamOptions {
     /// Output volume, 0..=100 (applied by the audio sink, not part of the launch spec).
     #[serde(default = "default_volume")]
     pub volume: u8,
+    /// Client-side upscaling with MetalFX: `"off"`, `"1440p"` or `"2160p"` (a cap on the output height).
+    #[serde(default = "default_upscale")]
+    pub upscale: String,
+    /// Frames per second to present. The console streams at most 60; above that the client generates frames.
+    #[serde(default = "default_display_fps")]
+    pub display_fps: u16,
+    /// Frame generation as a multiple of the stream's rate, in tenths: 10 = off (frames are shown as they arrive), 15 = 1.5x, 20 = 2x,
+    /// 25 = 2.5x, 30 = 3x. The rate presented is the stream's rate times this, never above what the display can show (and it steps down
+    /// when the Mac cannot keep it). 0 = not chosen yet (settings saved before this existed): `display_fps` is used as it was.
+    #[serde(default)]
+    pub frame_gen: u8,
+    /// How generated frames are made: `"smooth"` (the default: interpolated, about one source frame of added latency, the
+    /// cleanest picture) or `"zero_latency"` (shown in the app as "Low latency": predicted forward, no added latency, more artifacts).
+    #[serde(default = "default_frame_mode")]
+    pub frame_mode: String,
+    /// Shift the picture by camera rotation that the stick has commanded but the stream does not show yet. On by default: it
+    /// learns the game's response and switches itself off when the stick does not explain the motion.
+    #[serde(default = "default_camera_comp")]
+    pub camera_comp: bool,
+    /// Who makes the interpolated frames in Smooth mode: `builtin` (ours) or `metalfx` (Apple's, experimental).
+    #[serde(default = "default_framegen")]
+    pub framegen: String,
+    /// Sharpness in percent (0..=200). With the upscaler: 0 smooth enlargement, 100 as the upscaler draws it, above that sharper. Without it:
+    /// 50 leaves the picture alone, above sharpens, below softens.
+    #[serde(default = "default_sharpness")]
+    pub sharpness: u8,
+    /// Colour saturation in percent: 100 = as the stream is, above = more vivid, below = paler.
+    #[serde(default = "default_saturation")]
+    pub saturation: u8,
+    /// Draw the key mapped to each controller button prompt the picture shows (✕, ◯, L1, ...).
+    #[serde(default)]
+    pub show_prompts: bool,
+    /// Which version of the settings this was saved by (see `migrated`).
+    #[serde(default)]
+    pub settings_version: u8,
+}
+
+/// The settings as this version of the app writes them.
+pub const SETTINGS_VERSION: u8 = 2;
+
+impl StreamOptions {
+    /// Settings saved by an older version, brought up to date: the stream always runs at 60 fps (the setting is gone), and a sharpness that
+    /// is still the old default of 50 becomes the new default of 60. Once saved the version is current and a chosen 50 stays.
+    pub fn migrated(mut self) -> Self {
+        self.fps = 60;
+        if self.settings_version < 2 && self.sharpness == 50 {
+            self.sharpness = default_sharpness();
+        }
+        self.settings_version = SETTINGS_VERSION;
+        self
+    }
+}
+
+fn default_upscale() -> String {
+    "off".into()
+}
+fn default_display_fps() -> u16 {
+    60
+}
+fn default_frame_mode() -> String {
+    "smooth".into()
+}
+fn default_saturation() -> u8 {
+    100
+}
+fn default_sharpness() -> u8 {
+    60
+}
+fn default_framegen() -> String {
+    "builtin".into()
+}
+fn default_camera_comp() -> bool {
+    true
 }
 
 fn default_volume() -> u8 {
@@ -183,6 +261,12 @@ impl StreamOptions {
         if !matches!(self.height, 360 | 540 | 720 | 1080) {
             return Err(format!("unsupported resolution height {} (use 360, 540, 720 or 1080)", self.height));
         }
+        if self.width != self.height * 16 / 9 {
+            return Err(format!(
+                "resolution {}x{} is not 16:9 (use 640x360, 960x540, 1280x720 or 1920x1080)",
+                self.width, self.height
+            ));
+        }
         if !matches!(self.fps, 30 | 60) {
             return Err(format!("unsupported frame rate {} (use 30 or 60)", self.fps));
         }
@@ -190,6 +274,39 @@ impl StreamOptions {
             return Err(format!(
                 "unsupported bitrate {} (use automatic, 2000, 6000, 10000 or 15000 kbps)",
                 self.bitrate
+            ));
+        }
+        if !matches!(self.upscale.as_str(), "off" | "1440p" | "2160p") {
+            return Err(format!(
+                "unsupported upscaling {:?} (use off, 1440p or 2160p)",
+                self.upscale.chars().take(12).collect::<String>()
+            ));
+        }
+        if !matches!(self.frame_gen, 0 | 10 | 15 | 20 | 25 | 30) {
+            return Err(format!(
+                "unsupported frame generation {} (use 10, 15, 20, 25 or 30: tenths of the stream rate)",
+                self.frame_gen
+            ));
+        }
+        if !matches!(self.display_fps, 30 | 60 | 75 | 120 | 144) {
+            return Err(format!("unsupported display rate {} (use 30, 60, 75, 120 or 144)", self.display_fps));
+        }
+        if self.sharpness > 200 {
+            return Err(format!("sharpness {} is not between 0 and 200", self.sharpness));
+        }
+        if self.saturation > 200 {
+            return Err(format!("saturation {} is not between 0 and 200", self.saturation));
+        }
+        if !matches!(self.framegen.as_str(), "builtin" | "metalfx") {
+            return Err(format!(
+                "unknown frame generation engine {:?}",
+                self.framegen.chars().take(16).collect::<String>()
+            ));
+        }
+        if !matches!(self.frame_mode.as_str(), "zero_latency" | "smooth") {
+            return Err(format!(
+                "unsupported frame mode {:?} (use zero_latency or smooth)",
+                self.frame_mode.chars().take(16).collect::<String>()
             ));
         }
         if self.volume > 100 {
@@ -204,7 +321,25 @@ impl StreamOptions {
 
 impl Default for StreamOptions {
     fn default() -> Self {
-        Self { width: 1280, height: 720, fps: 60, bitrate: -1, hevc: false, hdr: false, volume: default_volume() }
+        Self {
+            width: 1280,
+            height: 720,
+            fps: 60,
+            bitrate: -1,
+            hevc: false,
+            hdr: false,
+            volume: default_volume(),
+            upscale: default_upscale(),
+            display_fps: default_display_fps(),
+            frame_gen: 20,
+            frame_mode: default_frame_mode(),
+            camera_comp: default_camera_comp(),
+            framegen: default_framegen(),
+            sharpness: default_sharpness(),
+            saturation: default_saturation(),
+            show_prompts: false,
+            settings_version: SETTINGS_VERSION,
+        }
     }
 }
 
@@ -234,11 +369,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_settings_are_brought_up_to_date_once() {
+        // always 60 fps: a saved 30 (or a hand-edited file) comes back as 60
+        let old = StreamOptions { fps: 30, sharpness: 50, settings_version: 0, ..Default::default() };
+        let m = old.clone().migrated();
+        assert_eq!(
+            (m.fps, m.sharpness, m.settings_version),
+            (60, 60, SETTINGS_VERSION),
+            "the old default sharpness becomes the new one"
+        );
+        // an old file that has no version at all reads as version 0
+        let from_file: StreamOptions = serde_json::from_str(
+            r#"{"width":1280,"height":720,"fps":30,"bitrate":-1,"hevc":true,"hdr":false,"sharpness":50}"#,
+        )
+        .unwrap();
+        assert_eq!(from_file.settings_version, 0);
+        assert_eq!(from_file.migrated().sharpness, 60);
+        // once saved by this version, a chosen 50 stays
+        let chosen = StreamOptions { sharpness: 50, settings_version: SETTINGS_VERSION, ..Default::default() };
+        assert_eq!(chosen.clone().migrated().sharpness, 50);
+        // any other sharpness is left alone, even in an old file
+        assert_eq!(StreamOptions { sharpness: 80, settings_version: 0, ..Default::default() }.migrated().sharpness, 80);
+        assert_eq!(StreamOptions::default().sharpness, 60);
+        assert_eq!(StreamOptions::default().fps, 60);
+        assert_eq!(
+            chosen.migrated().migrated(),
+            StreamOptions { sharpness: 50, ..Default::default() },
+            "migrating twice changes nothing"
+        );
+    }
+
+    #[test]
     fn stream_options_validation() {
         let ok = StreamOptions::default();
         assert!(ok.validate().is_ok());
         for h in [360, 540, 720, 1080] {
-            assert!(StreamOptions { height: h, ..ok.clone() }.validate().is_ok(), "{h}");
+            assert!(StreamOptions { height: h, width: h * 16 / 9, ..ok.clone() }.validate().is_ok(), "{h}");
         }
         for bad in [
             StreamOptions { height: 1234, ..ok.clone() },
@@ -262,6 +428,57 @@ mod tests {
             serde_json::from_str(r#"{"width":1280,"height":720,"fps":60,"bitrate":-1,"hevc":true,"hdr":false}"#)
                 .unwrap();
         assert_eq!(old.volume, 100);
+        assert_eq!(
+            (old.upscale.as_str(), old.display_fps, old.frame_mode.as_str(), old.camera_comp),
+            ("off", 60, "smooth", true)
+        );
+        for u in ["off", "1440p", "2160p"] {
+            assert!(StreamOptions { upscale: u.into(), ..ok.clone() }.validate().is_ok(), "{u}");
+        }
+        for f in [30, 60, 75, 120, 144] {
+            assert!(StreamOptions { display_fps: f, ..ok.clone() }.validate().is_ok(), "{f}");
+        }
+        for g in [0, 10, 15, 20, 25, 30] {
+            assert!(StreamOptions { frame_gen: g, ..ok.clone() }.validate().is_ok(), "{g}");
+        }
+        assert_eq!(
+            old.frame_gen, 0,
+            "settings saved before frame generation modes existed keep their display rate until a mode is chosen"
+        );
+        for bad in [
+            StreamOptions { upscale: "4k".into(), ..ok.clone() },
+            StreamOptions { upscale: String::new(), ..ok.clone() },
+            StreamOptions { upscale: "x".repeat(10_000), ..ok.clone() },
+            StreamOptions { frame_gen: 12, ..ok.clone() },
+            StreamOptions { frame_gen: 40, ..ok.clone() },
+            StreamOptions { display_fps: 90, ..ok.clone() },
+            StreamOptions { display_fps: 0, ..ok.clone() },
+            StreamOptions { display_fps: 240, ..ok.clone() },
+            StreamOptions { frame_mode: "interpolate".into(), ..ok.clone() },
+            StreamOptions { frame_mode: "\u{0}".into(), ..ok.clone() },
+            StreamOptions { framegen: "dlss".into(), ..ok.clone() },
+            StreamOptions { sharpness: 201, ..ok.clone() },
+            StreamOptions { saturation: 201, ..ok.clone() },
+            StreamOptions { framegen: String::new(), ..ok.clone() },
+            StreamOptions { framegen: "m".repeat(10_000), ..ok.clone() },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        assert!(StreamOptions { frame_mode: "smooth".into(), camera_comp: true, ..ok.clone() }.validate().is_ok());
+        for (sharp, sat) in [(0, 0), (50, 100), (200, 200)] {
+            assert!(
+                StreamOptions { sharpness: sharp, saturation: sat, ..ok.clone() }.validate().is_ok(),
+                "{sharp}/{sat}"
+            );
+        }
+        for engine in ["builtin", "metalfx"] {
+            assert!(StreamOptions { framegen: engine.into(), ..ok.clone() }.validate().is_ok(), "{engine}");
+        }
+        // settings saved by an older version have no engine: they get the built-in one
+        let old: StreamOptions =
+            serde_json::from_str(&serde_json::to_string(&ok).unwrap().replace(",\"framegen\":\"builtin\"", ""))
+                .unwrap();
+        assert_eq!(old.framegen, "builtin");
     }
 
     #[test]
@@ -282,5 +499,17 @@ mod tests {
             r#"{"state":"handshaking","attempt":2}"#
         );
         assert_eq!(serde_json::to_string(&SessionState::Idle).unwrap(), r#"{"state":"idle"}"#);
+    }
+
+    #[test]
+    fn the_width_must_match_the_height() {
+        let ok = StreamOptions::default();
+        assert!(ok.validate().is_ok());
+        for (w, h) in [(0, 720), (99999, 720), (1280, 1080), (1920, 720), (-1280, 720)] {
+            assert!(StreamOptions { width: w, height: h, ..ok.clone() }.validate().is_err(), "{w}x{h}");
+        }
+        for (w, h) in [(640, 360), (960, 540), (1280, 720), (1920, 1080)] {
+            assert!(StreamOptions { width: w, height: h, ..ok.clone() }.validate().is_ok(), "{w}x{h}");
+        }
     }
 }

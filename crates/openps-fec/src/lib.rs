@@ -71,7 +71,7 @@ pub enum FecError {
 
 /// m x k coding matrix: M[i][j] = 1 / (i XOR (m + j)).
 pub fn cauchy_matrix(k: usize, m: usize) -> Result<Vec<Vec<u8>>, FecError> {
-    if k == 0 || m == 0 || k + m > 256 {
+    if k == 0 || m == 0 || k > 256 || m > 256 || k + m > 256 {
         return Err(FecError::BadParams);
     }
     let gf = gf();

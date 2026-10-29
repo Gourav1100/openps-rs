@@ -38,6 +38,9 @@ impl PcmOut for Player {
 
 pub type OutputFactory = Box<dyn Fn(&AudioHeader) -> Result<Box<dyn PcmOut>, String> + Send + Sync>;
 
+/// Failed frames in a row (across decoder resets) after which a problem is reported to the user.
+pub const PROBLEM_AFTER_ERRORS: u32 = 50;
+
 /// Opus errors in a row after which the decoder is reset (the original tolerates 30 before giving up).
 pub const MAX_CONSECUTIVE_ERRORS: u32 = 30;
 
@@ -46,6 +49,7 @@ struct Active {
     out: Box<dyn PcmOut>,
     scratch: Vec<i16>,
     consecutive_errors: u32,
+    failing_streak: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -145,7 +149,8 @@ impl MediaSink for AudioOut {
             Err(e) => return self.fail(format!("cannot open the audio output: {e}")),
         };
         out.set_volume(f32::from(self.volume()) / 100.0);
-        *self.active.lock_ok() = Some(Active { dec, out, scratch: Vec::new(), consecutive_errors: 0 });
+        *self.active.lock_ok() =
+            Some(Active { dec, out, scratch: Vec::new(), consecutive_errors: 0, failing_streak: 0 });
     }
 
     fn audio(&self, frames: Vec<OpusFrame>) {
@@ -159,12 +164,23 @@ impl MediaSink for AudioOut {
             match a.dec.decode(&f.data, &mut a.scratch) {
                 Ok(()) => {
                     a.consecutive_errors = 0;
+                    if a.failing_streak >= PROBLEM_AFTER_ERRORS {
+                        *self.last_problem.lock_ok() = None;
+                    }
+                    a.failing_streak = 0;
                     self.decoded.fetch_add(1, Ordering::Relaxed);
                     a.out.push(&a.scratch);
                 }
                 Err(_) => {
                     self.errors.fetch_add(1, Ordering::Relaxed);
                     a.consecutive_errors += 1;
+                    a.failing_streak = a.failing_streak.saturating_add(1);
+                    if a.failing_streak == PROBLEM_AFTER_ERRORS {
+                        self.fail(
+                            "audio frames cannot be decoded (the stream's frame size probably does not match its packets)"
+                                .into(),
+                        );
+                    }
                     if a.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                         // a long run of bad frames: stale decoder state is likelier the cause than the data
                         a.dec.reset();

@@ -61,7 +61,11 @@ impl DemoConfig {
         let lossy = std::env::var("OPENPS_DEMO_LOSS").is_ok_and(|v| v == "1");
         Some(Self {
             codec,
-            fps: 30,
+            fps: std::env::var("OPENPS_DEMO_FPS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|f| (1..=120).contains(f))
+                .unwrap_or(30),
             recoverable_loss_every: if lossy { 7 } else { 0 },
             fatal_loss_every: if lossy { 97 } else { 0 },
             audio: std::env::var("OPENPS_DEMO_AUDIO").map_or(true, |v| v != "0"),
@@ -108,6 +112,16 @@ impl DemoBackend {
     }
 
     fn clip(&self) -> &'static [u8] {
+        // dev aid: `OPENPS_DEMO_CLIP=<file.annexb>` streams your own H.264 clip instead (read once, kept for the process lifetime)
+        if let Some(path) = std::env::var_os("OPENPS_DEMO_CLIP") {
+            static CUSTOM: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+            if let Some(b) = CUSTOM.get_or_init(|| std::fs::read(path).unwrap_or_default()).as_slice().into() {
+                // a file that is not Annex-B video has no access units: use the built-in clip instead of dividing by zero later
+                if !b.is_empty() && !nal::access_units(self.cfg.codec, b).is_empty() {
+                    return b;
+                }
+            }
+        }
         match self.cfg.codec {
             Codec::Hevc => HEVC,
             Codec::H264 => H264,
@@ -118,7 +132,7 @@ impl DemoBackend {
 impl Drop for DemoBackend {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        for t in self.threads.lock().unwrap().drain(..) {
+        for t in self.threads.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
             let _ = t.join();
         }
     }
@@ -165,7 +179,7 @@ impl Backend for DemoBackend {
         let (stream_client, stream_server) = mem_pair();
         let (test_client, test_server) = mem_pair();
         let (cfg, stop, clip) = (self.cfg, self.stop.clone(), self.clip());
-        let mut t = self.threads.lock().unwrap();
+        let mut t = self.threads.lock().unwrap_or_else(|e| e.into_inner());
         t.retain(|h| !h.is_finished()); // do not accumulate one handle per past session
         t.push(std::thread::spawn(move || serve_stream(stream_server, cfg, clip, stop)));
         let stop = self.stop.clone();
@@ -200,6 +214,9 @@ fn serve_stream(mut link: Link, cfg: DemoConfig, clip: &'static [u8], stop: Arc<
     }
     let Some(mut sc) = con.into_stream_console() else { return };
     let units = nal::access_units(cfg.codec, clip);
+    if units.is_empty() {
+        return; // nothing to play (cannot happen with the built-in clips)
+    }
     let pace = Duration::from_secs_f64(1.0 / f64::from(cfg.fps.max(1)));
     let audio_pace = Duration::from_millis(10);
     let (mut next_video, mut next_audio) = (Instant::now(), Instant::now());
@@ -323,4 +340,177 @@ impl openps_core::PsnService for DemoPsn {
         Ok(openps_core::PsnAccountInfo { online_id: "DemoPlayer".into(), account_id: "1234567890123456".into() })
     }
     fn sign_out(&self) {}
+
+    // the PSN API, faked: any well-formed npsso "signs in", and the account owns one demo console
+    fn api_available(&self) -> bool {
+        true
+    }
+    fn api_sign_in(&self, pasted: &str) -> Result<(), String> {
+        openps_psn::api::extract_npsso(pasted)
+            .ok_or_else(|| "that does not look like a PlayStation login token (npsso)".to_string())?;
+        DEMO_API_SIGNED_IN.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+    fn remote_access_token(&self) -> Result<String, String> {
+        Ok("demo-token".into())
+    }
+    fn api_signed_in(&self) -> bool {
+        DEMO_API_SIGNED_IN.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn api_sign_out(&self) {
+        DEMO_API_SIGNED_IN.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn api_library(&self) -> Result<openps_psn::library::Library, String> {
+        Ok(demo_library())
+    }
+    fn api_launch(&self, _duid: &str, title_id: &str) -> Result<String, String> {
+        if title_id.is_empty() {
+            return Err("no title".into());
+        }
+        Ok(format!("demo-{title_id}"))
+    }
+    fn api_command_status(&self, command_id: &str) -> Result<openps_psn::library::CommandStatus, String> {
+        Ok(openps_psn::library::CommandStatus {
+            status: "completed".into(),
+            result: "success".into(),
+            action: "launchTitle".into(),
+            action_state: if command_id.starts_with("demo-") { "done".into() } else { String::new() },
+        })
+    }
+    fn api_art(&self, url: &str) -> Result<(Vec<u8>, String), String> {
+        Ok(demo_art(url))
+    }
+    fn api_consoles(&self) -> Result<Vec<openps_core::PsnConsole>, String> {
+        Ok(vec![openps_core::PsnConsole {
+            duid: "00000007004100800000000000000000000000000000demo".into(),
+            name: "Demo PS5".into(),
+            platform: "PS5".into(),
+            updated: Some("2026-10-22T09:00:00Z".into()),
+        }])
+    }
+}
+
+/// name, platform, trophy progress %, earned and total counts (platinum, gold, silver, bronze)
+type DemoGame = (&'static str, &'static str, u8, [u32; 4], [u32; 4]);
+const DEMO_GAMES: &[DemoGame] = &[
+    ("Ghost of Yōtei", "PS5", 64, [1, 6, 11, 28], [1, 8, 14, 33]),
+    ("Astro Bot", "PS5", 100, [1, 9, 12, 20], [1, 9, 12, 20]),
+    ("Gran Turismo 7", "PS5", 38, [0, 4, 15, 40], [1, 9, 24, 66]),
+    ("Spider-Man 2", "PS5", 77, [1, 7, 12, 30], [1, 8, 14, 33]),
+    ("Elden Ring", "PS5", 12, [0, 1, 4, 18], [1, 11, 20, 40]),
+    ("God of War Ragnarök", "PS5", 55, [0, 5, 14, 29], [1, 9, 28, 36]),
+    ("Returnal", "PS5", 25, [0, 2, 9, 22], [1, 6, 13, 32]),
+    ("Horizon Forbidden West", "PS5", 90, [1, 10, 14, 30], [1, 10, 14, 33]),
+    ("Hades", "PS5", 0, [0, 0, 0, 0], [1, 9, 15, 26]),
+    ("The Last of Us Part I", "PS5", 41, [0, 3, 9, 25], [1, 8, 16, 38]),
+    ("Marvel’s Spider-Man", "PS4", 100, [1, 9, 15, 31], [1, 9, 15, 31]),
+    ("Bloodborne", "PS4", 18, [0, 1, 5, 14], [1, 9, 12, 27]),
+];
+
+fn demo_library() -> openps_psn::library::Library {
+    use openps_psn::library::{Game, GameTrophies, Library, TrophyCounts, TrophySummary};
+    let c = |a: [u32; 4]| TrophyCounts { platinum: a[0], gold: a[1], silver: a[2], bronze: a[3] };
+    let games = DEMO_GAMES
+        .iter()
+        .enumerate()
+        .map(|(i, (name, platform, progress, earned, total))| Game {
+            title_id: Some(format!("PPSA{:05}", 1000 + i)),
+            name: (*name).into(),
+            platform: (*platform).into(),
+            image_url: Some(format!("https://image.api.playstation.com/demo/{i}.png")),
+            last_played: Some(format!("2026-10-{:02}T09:00:00Z", 22 - i.min(20))),
+            play_minutes: Some(60 + 37 * i as u32),
+            trophies: (*progress > 0 || i % 3 == 0).then(|| GameTrophies {
+                progress: *progress,
+                earned: c(*earned),
+                total: c(*total),
+            }),
+        })
+        .collect();
+    let installed = (0..DEMO_GAMES.len())
+        .filter(|i| i % 4 != 3)
+        .map(|i| openps_psn::library::InstalledTitle {
+            title_id: format!("PPSA{:05}", 1000 + i),
+            name: DEMO_GAMES[i].0.into(),
+            platform: DEMO_GAMES[i].1.into(),
+            kind: "game".into(),
+            size_bytes: 20_000_000_000 + i as u64 * 1_000_000_000,
+            last_access: Some(format!("2026-10-{:02}T09:00:00Z", 22 - i.min(20))),
+        })
+        .chain(std::iter::once(openps_psn::library::InstalledTitle {
+            title_id: "PPSA99999".into(),
+            name: "Never Played Yet".into(),
+            platform: "PS5".into(),
+            kind: "game".into(),
+            size_bytes: 5_000_000_000,
+            last_access: Some("2026-01-01T00:00:00Z".into()),
+        }))
+        .collect();
+    Library {
+        consoles: vec![openps_psn::library::ConsoleTitles {
+            duid: "00000007004100800000000000000000000000000000demo".into(),
+            name: "Demo PS5".into(),
+            installed,
+            updated: None,
+        }],
+        games,
+        summary: Some(TrophySummary {
+            level: 214,
+            progress: 61,
+            earned: TrophyCounts { platinum: 9, gold: 96, silver: 241, bronze: 612 },
+        }),
+    }
+}
+
+/// A generated cover so the demo shows the real layout without contacting anything.
+fn demo_art(url: &str) -> (Vec<u8>, String) {
+    let i: usize = url.rsplit('/').next().and_then(|f| f.split('.').next()).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let name = DEMO_GAMES.get(i).map_or("?", |g| g.0);
+    let initials: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
+    let hue = (i * 47) % 360;
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='hsl({hue},70%,45%)'/><stop offset='1' stop-color='hsl({},60%,18%)'/></linearGradient></defs><rect width='256' height='256' fill='url(#g)'/><text x='128' y='158' font-family='Helvetica,Arial,sans-serif' font-size='96' font-weight='700' text-anchor='middle' fill='rgba(255,255,255,.88)'>{initials}</text></svg>",
+        (hue + 40) % 360
+    );
+    (svg.into_bytes(), "image/svg+xml".into())
+}
+
+static DEMO_API_SIGNED_IN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Offline stand-in for registering over the internet: walks through the same steps with short pauses and "registers" a made-up
+/// console. Contacts nothing.
+pub struct DemoRegistrar;
+
+impl openps_core::RemoteRegistrar for DemoRegistrar {
+    fn register(
+        &self,
+        req: openps_core::RemoteRequest,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        progress: &dyn Fn(&str),
+    ) -> Result<openps_rp::regist::Registered, String> {
+        for step in
+            ["Connecting to PlayStation Network", "Asking your console to join", "Reaching your console", "Registering"]
+        {
+            progress(step);
+            for _ in 0..10 {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("cancelled".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+        }
+        if req.duid.contains("fail") {
+            return Err(
+                "could not reach your console over the network. It must be on and reachable from this computer.".into(),
+            );
+        }
+        Ok(openps_rp::regist::Registered {
+            device: openps_discovery::DeviceType::Ps5,
+            mac: "AABBCCDDEE02".into(),
+            nickname: "Demo PS5 (internet)".into(),
+            regist_key: "3a3b3c3d3e3f4041".into(),
+            rp_key: "00112233445566778899aabbccddeeff".into(),
+            ap_name: "PS5".into(),
+        })
+    }
 }

@@ -59,6 +59,21 @@ struct VTDecompressionOutputCallbackRecord {
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
     fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+    fn CFDictionaryCreate(
+        alloc: CFTypeRef,
+        keys: *const CFTypeRef,
+        values: *const CFTypeRef,
+        n: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> CFTypeRef;
+    fn CFNumberCreate(alloc: CFTypeRef, the_type: isize, value: *const c_void) -> CFTypeRef;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
+    static kCFBooleanTrue: CFTypeRef;
+    static kCVPixelBufferPixelFormatTypeKey: CFTypeRef;
+    static kCVPixelBufferMetalCompatibilityKey: CFTypeRef;
+    fn CVPixelBufferGetIOSurface(b: CVImageBufferRef) -> *mut c_void;
 
     fn CMVideoFormatDescriptionCreateFromH264ParameterSets(
         alloc: CFTypeRef,
@@ -126,6 +141,8 @@ extern "C" {
     fn CVPixelBufferGetHeight(b: CVImageBufferRef) -> usize;
     fn CVPixelBufferGetPixelFormatType(b: CVImageBufferRef) -> u32;
     fn CVPixelBufferGetPlaneCount(b: CVImageBufferRef) -> usize;
+    fn CVPixelBufferGetBaseAddress(b: CVImageBufferRef) -> *const u8;
+    fn CVPixelBufferGetBytesPerRow(b: CVImageBufferRef) -> usize;
     fn CVPixelBufferLockBaseAddress(b: CVImageBufferRef, flags: u64) -> i32;
     fn CVPixelBufferUnlockBaseAddress(b: CVImageBufferRef, flags: u64) -> i32;
     fn CVPixelBufferGetBaseAddressOfPlane(b: CVImageBufferRef, plane: usize) -> *const u8;
@@ -135,11 +152,23 @@ extern "C" {
 
 const READ_ONLY: u64 = 1; // kCVPixelBufferLock_ReadOnly
 /// `420v`: 8-bit 4:2:0 bi-planar, video range (what the console encodes).
+/// `BGRA`: 8-bit, converted by the decoder hardware (what the Metal renderer reads).
+pub const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
 pub const PIXEL_FORMAT_NV12_VIDEO: u32 = 0x3432_3076;
 /// `420f`: full range variant.
 pub const PIXEL_FORMAT_NV12_FULL: u32 = 0x3432_3066;
 /// `x420`: 10-bit 4:2:0 bi-planar video range (HEVC Main10 / HDR).
 pub const PIXEL_FORMAT_P010: u32 = 0x7834_3230;
+
+/// What the decoder should deliver.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// The decoder's own format (NV12 video range): cheapest, for the system compositor.
+    #[default]
+    Native,
+    /// 32-bit BGRA, converted in hardware and Metal-compatible: for the Metal renderer.
+    Bgra,
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -175,6 +204,14 @@ impl Frame {
     pub fn height(&self) -> usize {
         unsafe { CVPixelBufferGetHeight(self.buffer) }
     }
+    /// The id the source frame carried (the pipeline encodes it as `id * 1500` in the presentation time).
+    pub fn source_id(&self) -> u16 {
+        (self.pts / 1500) as u16
+    }
+    /// The backing `IOSurface` (for zero-copy Metal textures), valid while the frame lives. Null if there is none.
+    pub fn io_surface(&self) -> *mut c_void {
+        unsafe { CVPixelBufferGetIOSurface(self.buffer) }
+    }
     pub fn pixel_format(&self) -> u32 {
         unsafe { CVPixelBufferGetPixelFormatType(self.buffer) }
     }
@@ -190,8 +227,24 @@ impl Frame {
                 return out;
             }
             let bytes_per_sample = if self.pixel_format() == PIXEL_FORMAT_P010 { 2 } else { 1 };
+            if CVPixelBufferGetPlaneCount(self.buffer) == 0 {
+                // a non-planar format such as BGRA: one block of rows
+                let base = CVPixelBufferGetBaseAddress(self.buffer);
+                let stride = CVPixelBufferGetBytesPerRow(self.buffer);
+                let row_bytes = (self.width() * 4).min(stride);
+                if !base.is_null() {
+                    for r in 0..self.height() {
+                        out.extend_from_slice(std::slice::from_raw_parts(base.add(r * stride), row_bytes));
+                    }
+                }
+                CVPixelBufferUnlockBaseAddress(self.buffer, READ_ONLY);
+                return out;
+            }
             for p in 0..CVPixelBufferGetPlaneCount(self.buffer) {
                 let base = CVPixelBufferGetBaseAddressOfPlane(self.buffer, p);
+                if base.is_null() {
+                    continue;
+                }
                 let stride = CVPixelBufferGetBytesPerRowOfPlane(self.buffer, p);
                 let rows = CVPixelBufferGetHeightOfPlane(self.buffer, p);
                 // luma and interleaved chroma rows are both `width` samples; never read past the stride the system reports
@@ -240,10 +293,34 @@ pub struct Decoder {
     format: CMVideoFormatDescriptionRef,
     session: VTDecompressionSessionRef,
     queue: Queue,
+    output: OutputFormat,
     /// True once a keyframe has been decoded with the current session; P frames before that are refused.
     synced: bool,
 }
 unsafe impl Send for Decoder {}
+
+/// Destination image attributes asking for BGRA, Metal-compatible buffers (null for the decoder's native format).
+fn destination_attributes(output: OutputFormat) -> CFTypeRef {
+    if output == OutputFormat::Native {
+        return ptr::null();
+    }
+    unsafe {
+        let fmt = PIXEL_FORMAT_BGRA as i32;
+        let num = CFNumberCreate(ptr::null(), 3 /* kCFNumberSInt32Type */, &fmt as *const i32 as *const c_void);
+        let keys = [kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferMetalCompatibilityKey];
+        let values = [num, kCFBooleanTrue];
+        let d = CFDictionaryCreate(
+            ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            2,
+            &kCFTypeDictionaryKeyCallBacks as *const u8 as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const u8 as *const c_void,
+        );
+        CFRelease(num); // the dictionary holds its own reference
+        d
+    }
+}
 
 fn format_description(codec: Codec, p: &ParameterSets) -> Result<CMVideoFormatDescriptionRef, Error> {
     if !p.complete(codec) {
@@ -282,23 +359,31 @@ fn format_description(codec: Codec, p: &ParameterSets) -> Result<CMVideoFormatDe
 
 impl Decoder {
     pub fn new(codec: Codec, params: ParameterSets) -> Result<Self, Error> {
+        Self::new_with(codec, params, OutputFormat::Native)
+    }
+
+    pub fn new_with(codec: Codec, params: ParameterSets, output: OutputFormat) -> Result<Self, Error> {
         let queue: Queue = Arc::new(Mutex::new(vec![]));
-        let (format, session) = Self::make_session(codec, &params, &queue)?;
-        Ok(Decoder { codec, params, format, session, queue, synced: false })
+        let (format, session) = Self::make_session(codec, &params, &queue, output)?;
+        Ok(Decoder { codec, params, format, session, queue, output, synced: false })
     }
 
     fn make_session(
         codec: Codec,
         params: &ParameterSets,
         queue: &Queue,
+        output: OutputFormat,
     ) -> Result<(CMVideoFormatDescriptionRef, VTDecompressionSessionRef), Error> {
         let format = format_description(codec, params)?;
+        let attrs = destination_attributes(output);
         let record =
             VTDecompressionOutputCallbackRecord { callback: on_frame, refcon: Arc::as_ptr(queue) as *mut c_void };
         let mut session = ptr::null();
-        let st = unsafe {
-            VTDecompressionSessionCreate(ptr::null(), format, ptr::null(), ptr::null(), &record, &mut session)
-        };
+        let st =
+            unsafe { VTDecompressionSessionCreate(ptr::null(), format, ptr::null(), attrs, &record, &mut session) };
+        if !attrs.is_null() {
+            unsafe { CFRelease(attrs) };
+        }
         if st != 0 || session.is_null() {
             unsafe { CFRelease(format) };
             return Err(Error::Session(st));
@@ -330,7 +415,7 @@ impl Decoder {
             if !au.in_band.vps.is_empty() {
                 merged.vps = au.in_band.vps.clone();
             }
-            let (format, session) = Self::make_session(self.codec, &merged, &self.queue)?;
+            let (format, session) = Self::make_session(self.codec, &merged, &self.queue, self.output)?;
             self.teardown();
             self.format = format;
             self.session = session;
@@ -407,18 +492,23 @@ impl Decoder {
     }
 
     fn take(&mut self) -> Result<Vec<Frame>, Error> {
-        let items = std::mem::take(&mut *self.queue.lock().unwrap());
+        let items = std::mem::take(&mut *self.queue.lock().unwrap_or_else(|e| e.into_inner()));
         let mut frames = vec![];
+        let mut first_err = None;
         for i in items {
             match i {
                 Ok(f) => frames.push(f),
                 Err(st) => {
                     self.synced = false; // a failed picture breaks the reference chain: wait for the next keyframe
-                    return Err(Error::Decode(st));
+                    first_err.get_or_insert(st);
                 }
             }
         }
-        Ok(frames)
+        // good frames already collected are not thrown away together with a bad one
+        match first_err {
+            Some(st) if frames.is_empty() => Err(Error::Decode(st)),
+            _ => Ok(frames),
+        }
     }
 
     /// Forget decoder state after packet loss so only a keyframe restarts output.

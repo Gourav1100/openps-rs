@@ -2,7 +2,7 @@
 name = "openps-input"
 version.workspace = true
 edition.workspace = true
-description = "Con2PC keyboard/mouse -> virtual PS5 pad mapping engine (spec 04). Replaces openPS's own keyboard/mouse logic."
+description = "Con2PC keyboard/mouse -> virtual PS5 pad mapping engine (spec 04). Replaces OpenPS's own keyboard/mouse logic."
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -300,14 +300,15 @@ impl Runner {
             return Exit::Closed(None);
         }
         let mut last_rx = self.now();
+        let idle_s = sane_idle_timeout(params.idle_timeout_s);
         let mut need_idr = false;
         loop {
             let now = self.now();
             if let Err(e) = self.flush(&mut stream) {
                 return Exit::Failed(e);
             }
-            if now - last_rx > params.idle_timeout_s {
-                return Exit::Failed(format!("console stopped responding for {:.0} s", params.idle_timeout_s));
+            if now - last_rx > idle_s {
+                return Exit::Failed(format!("console stopped responding for {idle_s:.0} s"));
             }
             match self.recv(TICK) {
                 Ok(Some(Msg::Datagram(d))) => {
@@ -358,5 +359,30 @@ impl Runner {
     fn flush(&mut self, stream: &mut Stream) -> Result<(), String> {
         let packets: Vec<Vec<u8>> = std::iter::from_fn(|| stream.poll_transmit()).collect();
         self.send_all(packets.into_iter())
+    }
+}
+
+const MIN_IDLE_S: f64 = 0.1;
+
+/// NaN means "default" (10 s); anything below 0.1 s (zero, negative) is raised to 0.1 s so a healthy session is
+/// not failed on its first loop.
+fn sane_idle_timeout(v: f64) -> f64 {
+    if v.is_nan() {
+        10.0
+    } else {
+        v.max(MIN_IDLE_S)
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::sane_idle_timeout;
+
+    #[test]
+    fn idle_timeout_is_sanitised() {
+        assert_eq!(sane_idle_timeout(f64::NAN), 10.0);
+        assert_eq!(sane_idle_timeout(-5.0), 0.1);
+        assert_eq!(sane_idle_timeout(0.0), 0.1);
+        assert_eq!(sane_idle_timeout(7.0), 7.0);
     }
 }

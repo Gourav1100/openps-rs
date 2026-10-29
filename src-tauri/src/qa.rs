@@ -30,6 +30,14 @@ pub fn qa_close(app: AppHandle) -> Result<(), String> {
     app.get_webview_window("main").ok_or("no window")?.close().map_err(|e| e.to_string())
 }
 
+/// Bring the window to the front (measurements of frame pacing are only meaningful for a visible window).
+#[tauri::command]
+pub fn qa_focus(app: AppHandle) -> Result<(), String> {
+    let w = app.get_webview_window("main").ok_or("no window")?;
+    w.show().map_err(|e| e.to_string())?;
+    w.set_focus().map_err(|e| e.to_string())
+}
+
 pub fn start(app: AppHandle) {
     let Some(dir) = dir() else { return };
     log::warn!("QA harness active: watching {}", dir.display());
@@ -43,4 +51,10 @@ pub fn start(app: AppHandle) {
             let _ = w.eval(&script);
         }
     });
+}
+
+/// The pad state the key map last produced, as text.
+#[tauri::command]
+pub fn qa_last_pad() -> String {
+    crate::input::last_pad_debug()
 }

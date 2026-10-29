@@ -31,6 +31,24 @@ pub fn ctrl_path(version: &str) -> &'static str {
     }
 }
 
+/// Keep only a plausible console reason code (8 hex digits); anything else is dropped.
+pub fn clean_reason(s: &str) -> String {
+    if s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        s.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Keep only a plausible protocol version (digits and dots, short).
+fn clean_version(s: &str) -> String {
+    if s.len() <= 8 && s.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        s.to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// `GET init` with the registration key; the reply carries `RP-Nonce`.
 pub fn init_request(host: &str, regist_key_hex: &str, version: &str) -> Request {
     Request::new("GET", init_path(version))
@@ -94,8 +112,8 @@ pub fn parse_init_response(resp: &Response) -> Result<[u8; 16], InitError> {
     if !resp.ok() {
         return Err(InitError::Rejected {
             status: resp.status,
-            reason: resp.header("RP-Application-Reason").unwrap_or("").to_string(),
-            server_version: resp.header("RP-Version").unwrap_or("").to_string(),
+            reason: clean_reason(resp.header("RP-Application-Reason").unwrap_or("")),
+            server_version: clean_version(resp.header("RP-Version").unwrap_or("")),
         });
     }
     let nonce = resp.header("RP-Nonce").ok_or(InitError::NonceMissing)?;
@@ -230,7 +248,7 @@ pub fn parse_ctrl_response(
     if !resp.ok() {
         return Err(CtrlResponseError::Rejected {
             status: resp.status,
-            reason: resp.header("RP-Application-Reason").unwrap_or("").to_string(),
+            reason: clean_reason(resp.header("RP-Application-Reason").unwrap_or("")),
         });
     }
     let mut server_type = None;

@@ -1,0 +1,9 @@
+POST /sie/ps5/rp/sess/rgst HTTP/1.1
+HOST: 127.0.0.1:9295
+User-Agent: remoteplay Windows
+Connection: close
+RP-Version: 1.0
+Content-Length: 587
+Accept-Encoding: gzip
+
+{«´€²¥cÐð»2A E;_ø7³Sôbü5ÿ´“›‘­Æ„Ñ8QøàŽÿ‚ƒ	Wÿ¹WÛ–üNÇV"ltÃíÃÜ¼%d@Ð^LŽS1>±Z¶Ù{t¾Z?ÓM|kY>~fw ]Z0»Y„–ÿ‚ŒÛc7,é¢­)+ëBnÊY6í”·§]YèÑÃ…ø|38ª„–•o—½F@Ç–EÆrlvJéÊlÐú‹0 4­wÀÁÎS#c.•çÀÖi«/ŸØÿ¤U¦"$q	ÑeB /ôošÊ í­z+ËÞÚþ¸”ÑÜç©õå3yò4ãJNëò“B÷®´*ƒÄ]–c…šã…wÿ‡1wÂGÝ›–HÐ¼˜Û¥oÖö…l¯G¦JìËÑ=#¬Q›@Ò€“~¢t‡Aág%à‡c2‰–óm§Ðu„Ð_ö+t¨qHÆyp0)`ýškô <Mé±j#MgÐ;:¾qf‹¥6¸Ä‹I#õ»ÉGXqYûÌ”MRô!S{³š?ßt×•™I74ÿ5È­ŒØï|)ß3tNÖ aóÐ°õN§)öÙµ­¥—ïjãZ ˜áRa)Ùg±&ÏŸ"]‚>šW0w™h«'éŒœ$P±1«%M3üÇâ,½ib°NÂx	UÑâ«M~•¦|þ$u¨ÊƒìRéœ‚®ÑqL@Z€}]°	«PÃf¼Eêä‡°•:æÏwÇîÁèaü]|¨?T7Pü‚èŒÀñõßûÜ~R #

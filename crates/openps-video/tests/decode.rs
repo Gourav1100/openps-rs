@@ -154,3 +154,23 @@ fn midstream_resolution_change_rebuilds_the_decoder() {
     let f = dec.decode_annex_b(&ub[0], 0).unwrap();
     assert_eq!((f[0].width(), f[0].height()), (320, 192));
 }
+
+#[test]
+fn bgra_output_is_metal_ready_and_matches_the_native_decode() {
+    use openps_video::vt::{OutputFormat, PIXEL_FORMAT_BGRA};
+    let stream = data("h264.annexb");
+    let units = access_units(Codec::H264, &stream);
+    let mut native = Decoder::new(Codec::H264, ParameterSets::from_annex_b(Codec::H264, &stream)).unwrap();
+    let mut bgra =
+        Decoder::new_with(Codec::H264, ParameterSets::from_annex_b(Codec::H264, &stream), OutputFormat::Bgra).unwrap();
+    for (i, u) in units.iter().take(3).enumerate() {
+        let a = native.decode_annex_b(u, i as i64 * 1500).unwrap();
+        let b = bgra.decode_annex_b(u, i as i64 * 1500).unwrap();
+        assert_eq!((a.len(), b.len()), (1, 1));
+        let f = &b[0];
+        assert_eq!((f.width(), f.height(), f.pixel_format()), (320, 192, PIXEL_FORMAT_BGRA));
+        assert!(!f.io_surface().is_null(), "Metal needs an IOSurface-backed buffer");
+        assert_eq!(f.source_id() as usize, i, "the source frame id survives the decoder");
+        assert_eq!(f.copy_planes().len(), 320 * 192 * 4, "4 bytes per pixel");
+    }
+}

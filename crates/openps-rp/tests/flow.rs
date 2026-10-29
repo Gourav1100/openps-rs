@@ -142,7 +142,12 @@ fn serve<F: FnMut(TcpStream) + Send + 'static>(n: usize, mut handler: F) -> (u16
 }
 
 fn fast() -> Timeouts {
-    Timeouts { connect: Duration::from_secs(2), io: Duration::from_secs(5), retry_delay: Duration::from_millis(10) }
+    Timeouts {
+        connect: Duration::from_secs(2),
+        io: Duration::from_secs(5),
+        total: Duration::from_secs(10),
+        retry_delay: Duration::from_millis(10),
+    }
 }
 
 fn registered() -> Registered {

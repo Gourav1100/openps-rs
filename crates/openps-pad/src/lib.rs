@@ -112,7 +112,7 @@ pub fn touch_record(x: i32, y: i32, counter: u8, down: bool) -> [u8; 5] {
 
 /// Pad-presence record (`PadIdentity.presenceEvent`): `[0x80|pad, 0x1F | 0x20 if connected | 0x80]`.
 pub fn presence_record(pad: u8, connected: bool) -> [u8; 2] {
-    [0x80 | pad, 0x1F | if connected { 0x20 } else { 0 } | 0x80]
+    [0x80 | (pad & 3), 0x1F | if connected { 0x20 } else { 0 } | 0x80]
 }
 
 /// Pads 1-3 are stamped into the low bits of a record's first byte when its top bits are 0x80/0xA0/0xC0.

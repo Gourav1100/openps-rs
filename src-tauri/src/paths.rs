@@ -14,6 +14,13 @@ pub fn data_dir(env_override: Option<&str>, exe: &Path) -> PathBuf {
     }
 }
 
+/// `~/Library/Application Support/OpenPS`, used when the default folder beside the executable cannot be created (a read-only
+/// disk image, an app translocated by Gatekeeper, a bundle owned by another user).
+pub fn fallback_dir(home: Option<&str>) -> Option<PathBuf> {
+    let home = home.filter(|h| h.starts_with('/'))?;
+    Some(PathBuf::from(home).join("Library/Application Support/OpenPS"))
+}
+
 /// Create the directory owner-only; it holds secrets.
 pub fn ensure(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -27,9 +34,15 @@ pub fn ensure(dir: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn fallback_is_under_application_support() {
+        assert_eq!(fallback_dir(Some("/Users/a")).unwrap(), Path::new("/Users/a/Library/Application Support/OpenPS"));
+        assert!(fallback_dir(Some("relative")).is_none() && fallback_dir(None).is_none());
+    }
+
+    #[test]
     fn resolution_and_creation() {
-        let exe = Path::new("/apps/openPS.app/Contents/MacOS/openps");
-        assert_eq!(data_dir(None, exe), Path::new("/apps/openPS.app/Contents/MacOS/openps-data"));
+        let exe = Path::new("/apps/OpenPS.app/Contents/MacOS/openps");
+        assert_eq!(data_dir(None, exe), Path::new("/apps/OpenPS.app/Contents/MacOS/openps-data"));
         assert_eq!(data_dir(Some(""), exe), data_dir(None, exe));
         assert_eq!(data_dir(Some("  "), exe), data_dir(None, exe));
         assert_eq!(data_dir(Some("/x/y"), exe), Path::new("/x/y"));

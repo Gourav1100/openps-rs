@@ -57,8 +57,12 @@ impl CtrlTx {
         out.extend([0, 0]);
         let mut p = payload.to_vec();
         if !p.is_empty() {
+            let Some(next) = self.counter.checked_add(1) else {
+                // never wrap: that would reuse keystream. The session is unusable; send nothing.
+                return Vec::new();
+            };
             self.cipher.encrypt(&mut p, self.counter);
-            self.counter += 1;
+            self.counter = next;
         }
         out.extend(p);
         out
@@ -168,6 +172,8 @@ impl Inbound {
 pub enum FrameError {
     /// Declared payload length is implausible: the stream is out of sync or hostile.
     TooLarge(usize),
+    /// The inbound counter would overflow; the session must be torn down.
+    CounterExhausted,
 }
 
 /// Reassembles frames from a byte stream and decrypts them with an inbound counter that re-anchors on desync.
@@ -211,31 +217,40 @@ impl CtrlRx {
         if raw.is_empty() {
             return Ok(Some(Inbound::parse(ty, &raw)));
         }
-        let decode = |ctr: u32| {
+        let full = |ctr: u32| {
             let mut p = raw.clone();
             self.cipher.decrypt(&mut p, ctr);
             Inbound::parse(ty, &p)
         };
-        let first = decode(self.counter);
-        if first.plausible() {
-            self.counter += 1;
-            return Ok(Some(first));
+        // plausibility only depends on the first two bytes, so probe with a 2-byte prefix (cheap)
+        let probe = |ctr: u32| {
+            let mut p = raw[..raw.len().min(2)].to_vec();
+            self.cipher.decrypt(&mut p, ctr);
+            Inbound::parse(ty, &p).plausible()
+        };
+        let next = self.counter.checked_add(1).ok_or(FrameError::CounterExhausted)?;
+        if probe(self.counter) {
+            let m = full(self.counter);
+            self.counter = next;
+            return Ok(Some(m));
         }
         // a pad index >= 4 means we are out of step: search nearby counters for a plausible decode
+        let hi = self.counter.saturating_add(RESYNC_WINDOW);
         for d in 1..=RESYNC_WINDOW {
-            for ctr in [self.counter.wrapping_add(d), self.counter.wrapping_sub(d)] {
-                if ctr == self.counter || (ctr > self.counter + RESYNC_WINDOW) {
+            for ctr in [self.counter.checked_add(d), self.counter.checked_sub(d)].into_iter().flatten() {
+                if ctr > hi || ctr == u32::MAX {
                     continue;
                 }
-                let m = decode(ctr);
-                if m.plausible() {
+                if probe(ctr) {
+                    let m = full(ctr);
                     self.counter = ctr + 1;
                     return Ok(Some(m));
                 }
             }
         }
-        self.counter += 1;
-        Ok(Some(first)) // nothing plausible nearby: surface it as decoded
+        let m = full(self.counter);
+        self.counter = next;
+        Ok(Some(m)) // nothing plausible nearby: surface it as decoded
     }
 }
 

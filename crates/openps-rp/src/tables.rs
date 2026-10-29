@@ -131,7 +131,12 @@ impl KeyTables {
         Self::from_json(&std::fs::read_to_string(path).map_err(|e| TableError::Json(e.to_string()))?)
     }
 
-    /// Where tables are looked up: `$OPENPS_TABLES`, else `None`.
+    /// The tables compiled into the program (`builtin_tables.json`).
+    pub fn builtin() -> Self {
+        Self::from_json(include_str!("builtin_tables.json")).expect("the built-in key tables are valid")
+    }
+
+    /// An override file: `$OPENPS_TABLES`, else `None` (use [`KeyTables::builtin`]).
     pub fn from_env() -> Option<Result<Self, TableError>> {
         std::env::var_os("OPENPS_TABLES").map(|p| Self::load(std::path::Path::new(&p)))
     }

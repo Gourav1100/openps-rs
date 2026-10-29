@@ -4,3 +4,6 @@ node_modules/
 .DS_Store
 tables.json
 psn.json
+install/
+openps-data/
+*.class

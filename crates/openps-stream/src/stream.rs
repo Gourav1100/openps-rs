@@ -130,6 +130,41 @@ pub struct Stream {
     congestion: Congestion,
     next_congestion_at: f64,
     started_at: Option<f64>,
+    recv_seq: SeqWindow,
+}
+
+/// Sliding window of the last 64 received DATA sequence numbers (32-bit wrapping) for de-duplication.
+#[derive(Default)]
+struct SeqWindow {
+    hi: Option<u32>,
+    mask: u64, // bit i set = `hi - i` was seen
+}
+
+impl SeqWindow {
+    /// Record `seq`; false if it was already seen. A sequence more than 63 behind the window is processed
+    /// (not recorded) rather than suppressed, so a bogus jump can never silence the real stream.
+    fn is_new(&mut self, seq: u32) -> bool {
+        let Some(hi) = self.hi else {
+            self.hi = Some(seq);
+            self.mask = 1;
+            return true;
+        };
+        let d = seq.wrapping_sub(hi) as i32;
+        if d > 0 {
+            self.mask = if d >= 64 { 1 } else { (self.mask << d) | 1 };
+            self.hi = Some(seq);
+            true
+        } else {
+            let back = d.unsigned_abs();
+            if back >= 64 {
+                return true;
+            }
+            let bit = 1u64 << back;
+            let fresh = self.mask & bit == 0;
+            self.mask |= bit;
+            fresh
+        }
+    }
 }
 
 impl Stream {
@@ -161,6 +196,7 @@ impl Stream {
             congestion: Congestion::default(),
             next_congestion_at: 0.0,
             started_at: None,
+            recv_seq: SeqWindow::default(),
         }
     }
 
@@ -215,7 +251,7 @@ impl Stream {
         }
         match packet_type(data[0]) {
             PacketType::Control => self.on_control(now, data),
-            PacketType::Video => self.on_video(data),
+            PacketType::Video => self.on_video(now, data),
             PacketType::Audio => self.on_audio(data),
             _ => vec![],
         }
@@ -227,6 +263,9 @@ impl Stream {
         match c.chunk_type {
             chunk_type::DATA => {
                 self.send_ack(c.sequence); // every received DATA chunk is acknowledged
+                if !self.recv_seq.is_new(c.sequence) {
+                    return ev; // retransmission of a chunk already processed
+                }
                 if c.flags != 1 {
                     return ev;
                 }
@@ -264,7 +303,7 @@ impl Stream {
         ev
     }
 
-    fn on_video(&mut self, data: &[u8]) -> Vec<Event> {
+    fn on_video(&mut self, now: f64, data: &[u8]) -> Vec<Event> {
         let Ok(p) = VideoPacket::parse(data, self.t20) else { return vec![] };
         let mut payload = p.payload.to_vec();
         let off = self.video_pos.offset(p.key_pos);
@@ -283,6 +322,10 @@ impl Stream {
         if outcome == Outcome::DeliveredWithGap && after > 0 {
             self.send_corrupt_frame(before, after);
         }
+        if self.video.take_resync() {
+            // the frame-id space no longer matches the console's: start over and ask for a keyframe
+            self.request_idr(now);
+        }
         let mut ev = vec![];
         while let Some(f) = self.video.pop_frame() {
             ev.push(Event::Video(f));
@@ -294,8 +337,9 @@ impl Stream {
         let Ok(p) = AudioPacket::parse(data, self.t20) else { return vec![] };
         let is_haptic = self.cfg.ps5 && self.cfg.haptics && p.unit_size as usize > HAPTIC_UNIT_SIZE_THRESHOLD;
         if !is_haptic && self.cfg.disable_audio {
+            self.audio.note_unit_ids(p.frame_id, p.source_units);
             return vec![];
-        } // counted for congestion upstream, never decoded
+        } // counted for congestion only, never decrypted or decoded
         let mut payload = p.payload.to_vec();
         let off = if is_haptic { self.haptic_pos.offset(p.key_pos) } else { self.audio_pos.offset(p.key_pos) };
         self.remote.ctr_xor(off, &mut payload);

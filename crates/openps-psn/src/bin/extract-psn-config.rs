@@ -19,14 +19,16 @@ fn main() {
         eprintln!("extraction failed: {e}");
         std::process::exit(1);
     });
-    std::fs::write(out, cfg.to_json()).unwrap_or_else(|e| {
+    // Owner-only from the first byte: create fresh (never reuse a file with looser permissions).
+    let _ = std::fs::remove_file(out);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let written = opts.open(out).and_then(|mut f| std::io::Write::write_all(&mut f, cfg.to_json().as_bytes()));
+    if let Err(e) = written {
         eprintln!("cannot write {out}: {e}");
         std::process::exit(1);
-    });
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o600));
     }
     println!("wrote {out} (mode 0600; contains a secret, keep it out of version control)");
 }

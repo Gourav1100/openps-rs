@@ -81,12 +81,16 @@ pub fn classify(codec: Codec, nal: &[u8]) -> Kind {
 
 /// Guess the codec from a parameter-set header: HEVC starts with a VPS (type 32), H.264 with an SPS (type 7).
 pub fn detect_codec(annex_b: &[u8]) -> Option<Codec> {
-    let first = *split(annex_b).first()?.first()?;
-    match (first & 0x1F, (first >> 1) & 0x3F) {
-        (7, _) => Some(Codec::H264),
-        (_, 32) => Some(Codec::Hevc),
-        _ => None,
+    // The header may start with an AUD/SEI: look at the first few NALs, not just the first one.
+    for nal in split(annex_b).into_iter().take(16) {
+        let Some(&first) = nal.first() else { continue };
+        match (first & 0x1F, (first >> 1) & 0x3F) {
+            (7, _) => return Some(Codec::H264),
+            (_, 32) => return Some(Codec::Hevc),
+            _ => {}
+        }
     }
+    None
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

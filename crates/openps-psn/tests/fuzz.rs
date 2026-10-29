@@ -24,6 +24,7 @@ fn cfg() -> PsnConfig {
         token_url: "https://a.test/2.0/oauth/token".into(),
         redirect_uri: "https://a.test/r".into(),
         scope: "x y".into(),
+        api: None,
     }
 }
 

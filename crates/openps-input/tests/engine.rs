@@ -30,6 +30,7 @@ struct Shared {
     pads: Vec<ControllerState>,
     beeps: Vec<(String, bool)>,
     killed: Vec<String>,
+    exits: Vec<bool>,
     overlay: Vec<OverlayState>,
     overlay_closed: bool,
 }
@@ -72,6 +73,9 @@ impl Platform for Mock {
     }
     fn beep(&mut self, s: &str, f: bool) {
         self.0.borrow_mut().beeps.push((s.into(), f));
+    }
+    fn exit_requested(&mut self, quit_app: bool) {
+        self.0.borrow_mut().exits.push(quit_app);
     }
     fn force_quit(&mut self, app: &str) -> Vec<u32> {
         self.0.borrow_mut().killed.push(app.into());
@@ -203,7 +207,7 @@ fn panic_gives_the_cursor_back_first_and_kills_target() {
     assert_eq!(s.borrow().cursor.first(), Some(&Cur::Release));
     assert!(e.stopped() && !e.enabled());
     assert_eq!(s.borrow().excl, (false, false));
-    assert_eq!(s.borrow().killed, vec!["openPS"]);
+    assert_eq!(s.borrow().killed, vec!["OpenPS"]);
     assert!(e.panic().is_empty()); // single-flight
     assert_eq!(s.borrow().killed.len(), 1);
 }
@@ -222,8 +226,26 @@ fn panic_with_no_target_kills_nothing() {
 fn panic_hotkey_stops_and_disables() {
     let (mut e, _s) = rig();
     e.apply_enabled(true);
-    assert_eq!(e.on_press(k(Key::F9), &held(&[Key::F9])), Some(Hotkey::Panic));
+    assert_eq!(e.on_press(k(Key::F11), &held(&[Key::F11])), Some(Hotkey::Panic));
     assert!(e.stopped() && !e.enabled());
+}
+
+#[test]
+fn f9_asks_the_host_to_close_everything_and_f12_to_end_the_stream() {
+    let (mut e, s) = rig();
+    e.apply_enabled(true);
+    s.borrow_mut().cursor.clear();
+    assert_eq!(e.on_press(k(Key::F12), &held(&[Key::F12])), Some(Hotkey::Quit));
+    assert!(
+        !e.enabled() && s.borrow().cursor.first() == Some(&Cur::Release),
+        "input is released before the host is told"
+    );
+    assert_eq!(s.borrow().exits, vec![false]);
+    assert!(s.borrow().killed.is_empty(), "F12 never kills anything");
+    let (mut e, s) = rig();
+    e.apply_enabled(true);
+    assert_eq!(e.on_press(k(Key::F11), &held(&[Key::F11])), Some(Hotkey::Panic));
+    assert_eq!(s.borrow().exits, vec![true]);
 }
 
 #[test]
@@ -236,7 +258,7 @@ fn shutdown_cleans_up_and_closes_target_only_if_owned() {
     let s2: S = Rc::new(RefCell::new(Shared { focused: true, ..Default::default() }));
     let mut e2 = Engine::new(load_defaults().unwrap(), Mock(s2.clone()), true).unwrap();
     e2.shutdown();
-    assert_eq!(s2.borrow().killed, vec!["openPS"]);
+    assert_eq!(s2.borrow().killed, vec!["OpenPS"]);
 }
 
 // ---- hotkeys ---------------------------------------------------------------------------------------
@@ -244,7 +266,7 @@ fn shutdown_cleans_up_and_closes_target_only_if_owned() {
 fn all_hotkeys_are_registered_for_swallowing() {
     let (_e, s) = rig();
     let hk = s.borrow().hotkeys.clone();
-    for key in [Key::F8, Key::F9, Key::F10, Key::F11, Key::F12] {
+    for key in [Key::F8, Key::F7, Key::F10, Key::F11, Key::F12] {
         assert!(hk.contains(&[k(key)].into_iter().collect()), "{key:?}");
     }
     assert_eq!(hk.len(), 5 + 12); // 6 slots + 6 right-Command twins
@@ -255,7 +277,7 @@ fn hotkey_priority_and_chord_rules() {
     let (e, _s) = rig();
     assert_eq!(e.hotkey_for(k(Key::F12), &held(&[Key::F12])), Some(Hotkey::Quit));
     assert_eq!(e.hotkey_for(k(Key::F10), &held(&[Key::F10])), Some(Hotkey::Toggle));
-    assert_eq!(e.hotkey_for(k(Key::F11), &held(&[Key::F11])), Some(Hotkey::NextProfile));
+    assert_eq!(e.hotkey_for(k(Key::F7), &held(&[Key::F7])), Some(Hotkey::NextProfile));
     assert_eq!(e.hotkey_for(k(Key::F8), &held(&[Key::F8])), Some(Hotkey::Overlay));
     assert_eq!(e.hotkey_for(k(Key::F2), &held(&[Key::LEFT_COMMAND, Key::F2])), Some(Hotkey::Slot(1)));
     assert_eq!(e.hotkey_for(k(Key::F2), &held(&[Key::RIGHT_COMMAND, Key::F2])), Some(Hotkey::Slot(1)));
@@ -285,19 +307,25 @@ fn toggle_hotkey_flips_mapping_on_the_next_tick_with_sounds() {
 fn profile_hotkeys_cycle_and_slots_select() {
     let (mut e, s) = rig();
     s.borrow_mut().pads.clear();
-    e.on_press(k(Key::F11), &held(&[Key::F11]));
+    e.on_press(k(Key::F7), &held(&[Key::F7]));
     e.tick(1.0);
     assert_eq!(e.profile(), "racing");
     assert_eq!(s.borrow().pads.last(), Some(&ControllerState::default())); // old layout released
-    e.on_press(k(Key::F11), &held(&[Key::F11]));
+    e.on_press(k(Key::F7), &held(&[Key::F7]));
     e.tick(2.0);
+    assert_eq!(e.profile(), "assassins_creed"); // the shipped profile order is default, racing, assassins_creed
+    e.on_press(k(Key::F7), &held(&[Key::F7]));
+    e.tick(3.0);
     assert_eq!(e.profile(), "default"); // wraps
     e.on_press(k(Key::F2), &held(&[Key::LEFT_COMMAND, Key::F2]));
-    e.tick(3.0);
-    assert_eq!(e.profile(), "racing");
-    e.on_press(k(Key::F5), &held(&[Key::LEFT_COMMAND, Key::F5]));
     e.tick(4.0);
-    assert_eq!(e.profile(), "racing"); // no 5th profile: unchanged
+    assert_eq!(e.profile(), "racing");
+    e.on_press(k(Key::F3), &held(&[Key::LEFT_COMMAND, Key::F3]));
+    e.tick(5.0);
+    assert_eq!(e.profile(), "assassins_creed");
+    e.on_press(k(Key::F5), &held(&[Key::LEFT_COMMAND, Key::F5]));
+    e.tick(6.0);
+    assert_eq!(e.profile(), "assassins_creed"); // no 5th profile: unchanged
 }
 
 #[test]
@@ -324,7 +352,7 @@ fn live_tick_drives_the_pad_and_idle_tick_does_not() {
     s.borrow_mut().pads.clear();
     e.tick(2.0);
     assert!(s.borrow().pads.last().unwrap().buttons.contains(&Button::CROSS));
-    assert!((e.period() - 1.0 / 500.0).abs() < 1e-12);
+    assert!((e.period() - 1.0 / 1000.0).abs() < 1e-12);
 }
 
 #[test]
@@ -440,16 +468,62 @@ fn reload_keeps_profile_click_modes_and_updates_hotkeys() {
     e.mapper().map(&InputSnapshot::new([tab], 0.0, 0.0), 0.0);
     e.mapper().map(&InputSnapshot::new([tab, left], 0.0, 0.0), 0.01);
     assert_eq!(e.mapper().click_modes().0, "RB");
-    let new = load_layers(Some("toggle = \"LEFT_CONTROL+F7\"\n"), false).unwrap();
+    let new = load_layers(Some("toggle = \"LEFT_CONTROL+F5\"\n"), false).unwrap();
     e.apply_config(new, None).unwrap();
     assert_eq!(e.profile(), "racing");
     assert_eq!(e.mapper().click_modes().0, "RB"); // session choice kept
-    assert!(s.borrow().hotkeys.contains(&[k(Key::LEFT_CONTROL), k(Key::F7)].into_iter().collect()));
-    assert_eq!(e.hotkey_for(k(Key::F7), &held(&[Key::LEFT_CONTROL, Key::F7])), Some(Hotkey::Toggle));
+    assert!(s.borrow().hotkeys.contains(&[k(Key::LEFT_CONTROL), k(Key::F5)].into_iter().collect()));
+    assert_eq!(e.hotkey_for(k(Key::F5), &held(&[Key::LEFT_CONTROL, Key::F5])), Some(Hotkey::Toggle));
     // a removed profile falls back to the first one; `select` picks a named one
     let gone = load_layers(Some("deleted_profiles = [\"racing\"]\n"), false).unwrap();
     e.apply_config(gone, None).unwrap();
     assert_eq!(e.profile(), "default");
     e.apply_config(load_defaults().unwrap(), Some("racing")).unwrap();
     assert_eq!(e.profile(), "racing");
+}
+
+#[test]
+fn the_mouse_is_ignored_for_a_moment_after_the_cursor_is_captured() {
+    // a platform whose mouse delta is huge on every read
+    struct Lurch(S);
+    impl Platform for Lurch {
+        fn is_frontmost(&mut self, _: &str) -> bool {
+            true
+        }
+        fn window_bounds(&mut self, _: &str) -> Option<Bounds> {
+            Some(WINDOW)
+        }
+        fn snapshot(&mut self) -> InputSnapshot {
+            InputSnapshot::new(std::iter::empty(), 400.0, 0.0)
+        }
+        fn set_exclusive(&mut self, _: bool, _: bool) {}
+        fn set_hotkey_swallow(&mut self, _: bool) {}
+        fn set_hotkeys(&mut self, _: &[Chord]) {}
+        fn cursor_engage(&mut self, _: Option<(f64, f64)>) {}
+        fn cursor_recenter(&mut self, _: (f64, f64)) {}
+        fn cursor_release(&mut self) {}
+        fn cursor_set_hide(&mut self, _: bool) {}
+        fn send_pad(&mut self, s: &ControllerState) {
+            self.0.borrow_mut().pads.push(s.clone());
+        }
+        fn beep(&mut self, _: &str, _: bool) {}
+        fn exit_requested(&mut self, _: bool) {}
+        fn force_quit(&mut self, _: &str) -> Vec<u32> {
+            vec![]
+        }
+        fn overlay_push(&mut self, _: &OverlayState) {}
+        fn overlay_close(&mut self) {}
+    }
+    let s: S = Rc::new(RefCell::new(Shared::default()));
+    let mut cfg = load_defaults().unwrap();
+    cfg.feedback_sounds = false;
+    let mut e = Engine::new(cfg, Lurch(s.clone()), false).unwrap();
+    e.start(0.0);
+    e.tick(1.0);
+    e.apply_enabled(true);
+    s.borrow_mut().pads.clear();
+    e.tick(1.01);
+    assert!(s.borrow().pads.iter().all(|p| p.right_x == 0.0), "no camera movement in the first moments");
+    e.tick(1.5);
+    assert!(s.borrow().pads.last().unwrap().right_x != 0.0, "the mouse works again afterwards");
 }

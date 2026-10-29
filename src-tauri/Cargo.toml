@@ -1,7 +1,7 @@
 [package]
 name = "openps-app"
 version = "0.1.0"
-description = "openPS Rust port (Tauri shell)"
+description = "OpenPS Rust port (Tauri shell)"
 authors = []
 license = ""
 repository = ""
@@ -15,31 +15,36 @@ name = "openps_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.7.4" }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.12.5" }
+tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 openps-fec = { path = "../crates/openps-fec" }
 openps-core = { path = "../crates/openps-core" }
 openps-input = { path = "../crates/openps-input" }
 openps-psn = { path = "../crates/openps-psn" }
 openps-rp = { path = "../crates/openps-rp" }
+openps-discovery = { path = "../crates/openps-discovery" }
+openps-remote = { path = "../crates/openps-remote", optional = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
 openps-takion = { path = "../crates/openps-takion" }
 
 [features]
 # Built-in pretend console (OPENPS_DEMO=hevc|h264) for UI work and end-to-end testing. Never contacts a network.
 demo = ["dep:openps-demo"]
 # Real HTTPS for PSN sign-in. Off by default: enabling it lets the app contact Sony's servers on the user's behalf.
-psn-live = ["openps-psn/live"]
+psn-live = ["openps-psn/live", "dep:openps-remote", "openps-remote/live"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 openps-video = { path = "../crates/openps-video" }
 openps-audio = { path = "../crates/openps-audio" }
+openps-macinput = { path = "../crates/openps-macinput" }
+openps-metal = { path = "../crates/openps-metal" }
 openps-demo = { path = "../crates/openps-demo", optional = true }
 
 [dev-dependencies]

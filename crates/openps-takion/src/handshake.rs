@@ -26,6 +26,10 @@ pub const STREAM_INFO_PAYLOAD: [u8; 21] = [
 pub const STREAM_INFO_OACK_PAYLOAD: [u8; 3] = [0x00, 0x08, 0x0e];
 pub const HEARTBEAT_PAYLOAD: [u8; 3] = [0x00, 0x08, 0x03];
 
+/// Bounds applied to `HandshakeConfig::mtu_out` (Senkusha already yields 576..=1454).
+const MTU_OUT_FLOOR: usize = 128;
+const MTU_OUT_CEIL: usize = 1454;
+
 pub struct HandshakeConfig {
     pub ps5: bool,
     /// Offer Takion version 20 in the protocol request.
@@ -386,11 +390,13 @@ impl Handshake {
         });
         let payload = m.to_chunk_payload();
         let mut packets = vec![];
-        if payload.len() + 25 + 28 <= self.cfg.mtu_out {
+        // an unvalidated mtu_out must not turn the Big payload into thousands of tiny chunks
+        let mtu_out = self.cfg.mtu_out.clamp(MTU_OUT_FLOOR, MTU_OUT_CEIL);
+        if payload.len() + 25 + 28 <= mtu_out {
             let seq = self.tsn();
             packets.push(Chunk::data(self.remote_tag, seq, class::GENERAL, payload).encode());
         } else {
-            let slice = self.cfg.mtu_out.saturating_sub(53).max(1);
+            let slice = mtu_out.saturating_sub(53).max(1);
             let n = payload.chunks(slice).count();
             for (i, part) in payload.chunks(slice).enumerate() {
                 let seq = self.tsn();

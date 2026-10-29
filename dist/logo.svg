@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="OpenPS">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="rgb(12, 18, 40)"/><stop offset="1" stop-color="rgb(30, 28, 64)"/></linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="rgb(50,100,235)" stop-opacity=".5"/><stop offset="1" stop-color="rgb(50,100,235)" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect x="100.0" y="100.0" width="824.0" height="824.0" rx="200" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="330" fill="url(#glow)"/>
+  <rect x="102.5" y="102.5" width="819" height="819" rx="197.5" fill="none" stroke="rgb(64, 110, 235)" stroke-opacity=".55" stroke-width="5"/>
+  <rect x="430" y="318" width="164" height="372" rx="82.0" fill="rgb(59, 130, 255)"/>
+  <rect x="480" y="368" width="64" height="272" rx="32.0" fill="rgb(22,26,58)"/>
+  <rect x="426" y="706" width="172" height="32" rx="16.0" fill="rgb(59, 130, 255)"/>
+</svg>

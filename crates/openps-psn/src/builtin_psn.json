@@ -1,0 +1,14 @@
+{
+  "client_id": "ba495a24-818c-472b-b12d-ff231c1b5745",
+  "client_secret": "mvaiZkRsAsI1IBkY",
+  "token_url": "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/token",
+  "redirect_uri": "https://remoteplay.dl.playstation.net/remoteplay/redirect",
+  "scope": "psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect sessionManager:remotePlaySession.system.update",
+  "api": {
+    "client_id": "09515159-7237-4370-9b40-3806e67c0891",
+    "basic_auth": "Basic MDk1MTUxNTktNzIzNy00MzcwLTliNDAtMzgwNmU2N2MwODkxOnVjUGprYTV0bnRCMktxc1A=",
+    "redirect_uri": "com.scee.psxandroid.scecompcall://redirect",
+    "scope": "psn:mobile.v2.core psn:clientapp",
+    "auth_base": "https://ca.account.sony.com/api/authz/v3/oauth"
+  }
+}

@@ -49,11 +49,16 @@ pub trait Platform {
     fn beep(&mut self, sound: &str, force: bool);
     /// SIGTERM then SIGKILL the target app; returns the pids that were killed.
     fn force_quit(&mut self, app: &str) -> Vec<u32>;
+    /// The user pressed the quit (`quit_app == false`: end the session) or panic (`true`: close everything) hotkey. Input has
+    /// already been released when this is called. Hosts that own the stream act on it; the default does nothing.
+    fn exit_requested(&mut self, _quit_app: bool) {}
     fn overlay_push(&mut self, state: &OverlayState);
     fn overlay_close(&mut self) {}
     /// Rename mode: start/stop recording non-repeat key presses as (key, shift held).
     fn start_key_log(&mut self) {}
     fn stop_key_log(&mut self) {}
+    /// Forget momentary inputs (scroll ticks) gathered while mapping was off, so they do not fire as a phantom press.
+    fn discard_pulses(&mut self) {}
     fn drain_key_log(&mut self) -> Vec<(Key, bool)> {
         vec![]
     }
@@ -64,13 +69,24 @@ pub trait Platform {
 pub enum UiEvent {
     OverlayClick,
     Cancel,
-    Edit { control: String, slot: i64 },
-    Clear { control: String, slot: i64 },
+    Edit {
+        control: String,
+        slot: i64,
+    },
+    Clear {
+        control: String,
+        slot: i64,
+    },
     Pick(String),
     ProfileReset,
-    Slider { value: f64, final_: bool },
+    Slider {
+        value: f64,
+        final_: bool,
+    },
     ProfileSelect(String),
     ProfileAdd,
+    /// A new profile that starts as a copy of the named one.
+    ProfileAddFrom(String),
     ProfileDelete(String),
     ProfileRename(String),
 }
@@ -93,7 +109,10 @@ impl UiEvent {
                 final_: v.get("final").and_then(|f| f.as_bool()).unwrap_or(false),
             },
             "profile_select" => UiEvent::ProfileSelect(name()),
-            "profile_add" => UiEvent::ProfileAdd,
+            "profile_add" => match v.get("source").and_then(|c| c.as_str()) {
+                Some(s) if !s.is_empty() => UiEvent::ProfileAddFrom(s.to_string()),
+                _ => UiEvent::ProfileAdd,
+            },
             "profile_delete" => UiEvent::ProfileDelete(name()),
             "profile_rename" => UiEvent::ProfileRename(name()),
             _ => return None,
@@ -130,6 +149,9 @@ pub enum Hotkey {
     Slot(usize),
 }
 
+/// After the cursor is captured the mouse is ignored for this long.
+const MOUSE_HOLD_S: f64 = 0.12;
+
 pub struct Engine<P: Platform> {
     pub cfg: Config,
     platform: P,
@@ -158,6 +180,8 @@ pub struct Engine<P: Platform> {
     now: f64,
     last_focus: f64,
     last_dog: f64,
+    /// Mouse movement is ignored until this time (just after the cursor was captured).
+    mouse_hold_until: f64,
     panicking: bool,
 }
 
@@ -194,6 +218,7 @@ impl<P: Platform> Engine<P> {
             now: 0.0,
             last_focus: f64::NEG_INFINITY,
             last_dog: f64::NEG_INFINITY,
+            mouse_hold_until: f64::NEG_INFINITY,
             panicking: false,
         })
     }
@@ -280,8 +305,17 @@ impl<P: Platform> Engine<P> {
         match h {
             Hotkey::Panic => {
                 self.panic();
+                self.platform.exit_requested(true);
             }
-            Hotkey::Quit => self.stop = true,
+            Hotkey::Quit => {
+                self.stop = true;
+                self.enabled = false;
+                self.mapper.reset();
+                self.platform.cursor_release();
+                self.platform.set_exclusive(false, false);
+                self.platform.send_pad(&ControllerState::default()); // no stuck button/stick on the console
+                self.platform.exit_requested(false);
+            }
             Hotkey::Toggle => self.f_toggle = true,
             Hotkey::NextProfile => self.f_profile = true,
             Hotkey::Overlay => self.f_overlay = true,
@@ -323,12 +357,15 @@ impl<P: Platform> Engine<P> {
 
     fn sync(&mut self) {
         self.mapper.reset();
+        self.platform.discard_pulses();
         if self.live() {
             self.drop_text_modes(); // editing is only possible while mapping is off
             self.apply_exclusivity();
             if self.cfg.mouse.capture_cursor {
                 let c = self.center();
                 self.platform.cursor_engage(c);
+                // whatever the pointer was doing a moment ago (and the warp to the centre) must not jerk the camera
+                self.mouse_hold_until = self.now + MOUSE_HOLD_S;
             }
         } else {
             self.apply_exclusivity();
@@ -364,7 +401,7 @@ impl<P: Platform> Engine<P> {
         if idx < self.profiles.len() {
             self.switch_profile(idx);
         } else {
-            self.say(format!("No profile in slot {}.", idx + 1));
+            self.say(format!("No profile in slot {}.", idx.saturating_add(1)));
         }
     }
 
@@ -471,6 +508,8 @@ impl<P: Platform> Engine<P> {
         self.enabled = false;
         self.platform.cursor_release(); // first: the user must regain the mouse
         self.platform.set_exclusive(false, false);
+        self.mapper.reset();
+        self.platform.send_pad(&ControllerState::default()); // no stuck button/stick on the console
         let killed = if self.cfg.target_app.is_empty() {
             vec![]
         } else {
@@ -525,6 +564,14 @@ impl<P: Platform> Engine<P> {
     /// One loop iteration (order from spec 04 section 8). `mono` is monotonic seconds.
     pub fn tick(&mut self, mono: f64) {
         self.now = mono;
+        if self.stop {
+            // After Quit/Panic nothing may re-enable mapping or re-capture the cursor.
+            self.f_toggle = false;
+            self.f_profile = false;
+            self.f_overlay = false;
+            self.slot_request = None;
+            return;
+        }
         if mono - self.last_focus >= FOCUS_POLL_S {
             self.last_focus = mono;
             self.poll_window();
@@ -554,7 +601,10 @@ impl<P: Platform> Engine<P> {
         self.poll_capture(mono);
         self.poll_text(mono);
         if self.live() {
-            let snap = self.platform.snapshot();
+            let mut snap = self.platform.snapshot();
+            if mono < self.mouse_hold_until {
+                (snap.mouse_dx, snap.mouse_dy) = (0.0, 0.0);
+            }
             let st = self.mapper.map(&snap, mono);
             self.platform.send_pad(&st);
             for ev in self.mapper.pop_events() {
@@ -618,6 +668,7 @@ impl<P: Platform> Engine<P> {
             UiEvent::Slider { value, final_ } => self.set_sensitivity(value, final_),
             UiEvent::ProfileSelect(n) => self.profile_request("select", &n),
             UiEvent::ProfileAdd => self.profile_request("add", ""),
+            UiEvent::ProfileAddFrom(n) => self.profile_request("add", &n),
             UiEvent::ProfileDelete(n) => self.profile_request("delete", &n),
             UiEvent::ProfileRename(n) => self.profile_request("rename", &n),
             UiEvent::OverlayClick | UiEvent::Cancel => {}
@@ -716,7 +767,8 @@ impl<P: Platform> Engine<P> {
                 self.say(format!("Up to {MAX_PROFILES} profiles."));
                 return;
             }
-            let src = self.profile().to_string();
+            let src =
+                if self.profiles.iter().any(|p| p == name) { name.to_string() } else { self.profile().to_string() };
             let mut created = String::new();
             let ok = self.edit_config(&mut |ed| {
                 created = ed.unique_name("profile");

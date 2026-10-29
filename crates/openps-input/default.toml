@@ -2,16 +2,16 @@
 # Names: see Key / MouseInput in src/con2pc/keys.py (digits are written 0-9 or KEY_0..KEY_9),
 # PS5 controls: see Button / Axis in src/con2pc/state.py.
 
-poll_hz = 500           # mapping loop rate; key/button presses also wake it at once
+poll_hz = 1000          # mapping loop rate (mouse moves wait at most 1 ms for it); key/button presses also wake it at once
 overlay_opacity = 0.5   # F8 overlay opacity (0.1 - 1.0)
 toggle = "F10"      # start/stop mapping (any chord, e.g. "LEFT_CONTROL+F10")
-quit = "F12"
-profile_key = "F11"   # cycle to the next key profile on the fly
-panic_key = "F9"      # force-quit target_app, release the cursor, stop mapping and exit
+quit = "F12"         # release input and end the stream (OpenPS stays open)
+profile_key = "F7"    # cycle to the next key profile on the fly
+panic_key = "F11"    # release the cursor, stop mapping, end the stream and close OpenPS
 overlay_key = "F8"    # show/hide the key-map overlay on top of target_app (click a key to rebind)
 overlay = true
-close_target_on_exit = true   # Ctrl+C / F12 also close openPS when con2pc started it
-# Direct profile selection: Command + F1..F6 picks the 1st..6th profile (F11 still cycles).
+close_target_on_exit = true   # Ctrl+C / F12 also close OpenPS when con2pc started it
+# Direct profile selection: Command + F1..F6 picks the 1st..6th profile (F7 still cycles).
 profile_slots = ["LEFT_COMMAND+F1", "LEFT_COMMAND+F2", "LEFT_COMMAND+F3",
                  "LEFT_COMMAND+F4", "LEFT_COMMAND+F5", "LEFT_COMMAND+F6"]
 # Reserved (never bindable): every hotkey above and Command (profile slots, adaptive triggers).
@@ -19,10 +19,10 @@ profile_slots = ["LEFT_COMMAND+F1", "LEFT_COMMAND+F2", "LEFT_COMMAND+F3",
 # capturing a binding in F8, tapping Escape binds it and HOLDING Escape skips the capture.
 # Mapping only grabs the keyboard/cursor while this app is frontmost, so leaving the
 # stream (or closing it) hands your mouse back. "" = always live and panic kills nothing.
-target_app = "openPS"
+target_app = "OpenPS"
 feedback_sounds = true  # short system sound on toggle / profile change
 start_enabled = false   # mapping starts OFF; press the toggle key to switch it on
-# While mapping is ON, no keyboard/mouse event reaches openPS (its own mouse/keyboard shortcuts
+# While mapping is ON, no keyboard/mouse event reaches OpenPS (its own mouse/keyboard shortcuts
 # are neutralised). Needs Accessibility permission. F8-F12 hotkeys are always kept from the app.
 suppress_input = true
 
@@ -32,7 +32,7 @@ sensitivity = 0.05
 smoothing = 0.6
 deadzone = 0.0
 invert_y = false
-capture_cursor = true    # lock the cursor to the centre of openPS while mapping is ON
+capture_cursor = true    # lock the cursor to the centre of OpenPS while mapping is ON
 hide_cursor = true       # ...and hide it
 move_threshold = 3.0
 recenter_ms = 40         # stick returns to centre this long after the mouse stops
@@ -105,18 +105,64 @@ RIGHT_STICK_RIGHT = ["L", "RIGHT_ARROW"]
 # output = ["L1", "CIRCLE"]
 
 # Profiles layer per-control overrides over [bindings] above (the "default" profile).
-# F11 cycles default -> racing -> default. Add your own as [profiles.<name>.bindings].
+# F7 cycles through the profiles. Add your own as [profiles.<name>.bindings].
+# Every profile has a permanent id. Games remember their key map by id, so renaming a profile never breaks the link.
+[profile_ids]
+racing = "p_3a1f0c01"
+assassins_creed = "p_3a1f0c02"
+
 [profiles.racing]
-description = "Racing: arrows drive and steer, W/A/S/D move the camera"
+description = "Racing: arrows steer and drive, W/A/S/D is the D-pad, Option+arrows move the camera"
 
 [profiles.racing.bindings]
-R2 = ["UP_ARROW", "MOUSE_LEFT"]       # accelerate
-L2 = ["DOWN_ARROW", "MOUSE_RIGHT"]    # brake / reverse
-LEFT_STICK_LEFT  = ["LEFT_ARROW"]     # steer left
-LEFT_STICK_RIGHT = ["RIGHT_ARROW"]    # steer right
-LEFT_STICK_UP    = []
-LEFT_STICK_DOWN  = []
-RIGHT_STICK_UP    = ["W"]             # camera
-RIGHT_STICK_DOWN  = ["S"]
-RIGHT_STICK_LEFT  = ["A"]
-RIGHT_STICK_RIGHT = ["D"]
+CROSS = ["X", "EQUAL"]
+CIRCLE = ["V", "MINUS"]
+SQUARE = ["SPACE"]
+TRIANGLE = ["C"]
+L1 = ["Q"]
+R1 = ["E"]
+L3 = ["H"]
+R3 = ["P"]
+CREATE = ["LEFT_OPTION+GRAVE"]  # share / photo mode
+OPTIONS = ["ESCAPE"]
+DPAD_UP = ["W"]
+DPAD_DOWN = ["S"]
+DPAD_LEFT = ["A"]
+DPAD_RIGHT = ["D"]
+L2 = ["DOWN_ARROW"]  # brake / reverse
+R2 = ["UP_ARROW"]  # accelerate
+LEFT_STICK_UP = []
+LEFT_STICK_DOWN = []
+LEFT_STICK_LEFT = ["LEFT_ARROW"]  # steer left
+LEFT_STICK_RIGHT = ["RIGHT_ARROW"]  # steer right
+RIGHT_STICK_UP = ["LEFT_OPTION+UP_ARROW"]  # camera
+RIGHT_STICK_DOWN = ["LEFT_OPTION+DOWN_ARROW", "Z"]
+RIGHT_STICK_LEFT = ["LEFT_OPTION+LEFT_ARROW"]
+RIGHT_STICK_RIGHT = ["LEFT_OPTION+RIGHT_ARROW"]
+TOUCHPAD_TAP = ["KEY_6"]
+TOUCHPAD_SWIPE_UP = ["KEY_7"]
+TOUCHPAD_SWIPE_DOWN = ["KEY_8"]
+TOUCHPAD_SWIPE_LEFT = ["KEY_9"]
+TOUCHPAD_SWIPE_RIGHT = ["KEY_0"]
+
+# Imported from the original Con2PC configuration (src/con2pc/user.toml, profile assassins_creed). F7 cycles
+# default -> racing -> assassins_creed; Command+F3 picks it directly. Anything not listed here keeps the default key.
+[profiles.assassins_creed]
+description = "Assassin's Creed (from Con2PC): Space/= jump, Option/- crouch, C/E actions, Q = L1, Shift+click or Z = R2"
+
+[profiles.assassins_creed.bindings]
+CROSS = ["SPACE", "EQUAL"]
+CIRCLE = ["LEFT_OPTION", "MINUS"]
+SQUARE = ["C"]
+TRIANGLE = ["E"]
+L1 = ["Q"]
+R1 = ["MOUSE_LEFT"]
+R3 = ["MOUSE_MIDDLE"]
+CREATE = ["TAB"]
+OPTIONS = ["ESCAPE"]
+PS = ["RIGHT_OPTION"]
+DPAD_UP = ["H"]
+DPAD_DOWN = ["V"]
+DPAD_LEFT = ["X"]
+DPAD_RIGHT = ["B"]
+R2 = ["LEFT_SHIFT+MOUSE_LEFT", "Z"]

@@ -7,7 +7,7 @@ use crate::config::{
 use crate::keys::{chord_to_str, parse_chord, Chord};
 use crate::state::{Axis, Button, Control, Gesture};
 use indexmap::IndexMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
@@ -39,6 +39,8 @@ pub struct EditorState {
     combos: Vec<Value>,
     raw: Table,
     profile_combos: IndexMap<String, Vec<Value>>,
+    /// Permanent ids by profile name, for every profile but the base (see `Config::id_of`).
+    ids: BTreeMap<String, String>,
 }
 
 pub struct Editor {
@@ -76,10 +78,9 @@ impl Editor {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
         let raw: Table = if path.exists() {
-            std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())?
-                .parse::<Table>()
-                .map_err(|e| format!("{}: {e}", path.display()))?
+            // The same (migrated) text the config was loaded from, so a saved file is fully migrated.
+            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            crate::config::parse_table(&crate::config::migrated_text(&text), &path.display().to_string())?
         } else {
             Table::new()
         };
@@ -117,6 +118,7 @@ impl Editor {
                 combos: cfg.combos.iter().map(combo_value).collect(),
                 raw,
                 profile_combos,
+                ids: cfg.profiles.keys().filter_map(|n| cfg.id_of(n).map(|i| (n.clone(), i))).collect(),
             },
         })
     }
@@ -125,8 +127,13 @@ impl Editor {
     pub fn current(&self) -> &str {
         &self.s.current
     }
-    pub fn set_current(&mut self, name: &str) {
-        self.s.current = name.to_string();
+    /// Select the profile to edit. Unknown names are ignored (returns false) so the accessors never see a missing profile.
+    pub fn set_current(&mut self, name: &str) -> bool {
+        let known = self.s.profiles.contains_key(name);
+        if known {
+            self.s.current = name.to_string();
+        }
+        known
     }
     pub fn default_name(&self) -> &str {
         &self.s.default_name
@@ -293,11 +300,40 @@ impl Editor {
 
     /// New profile: a copy of `source` (default: the base profile).
     pub fn add_profile(&mut self, name: &str, source: Option<&str>) -> Result<(), String> {
+        if name.trim().is_empty() {
+            return Err("type a name".into());
+        }
+        let name = &crate::config::snake_name(name);
         self.check_name(name, None)?;
         let src = source.unwrap_or(&self.s.default_name);
         let table = self.s.profiles.get(src).ok_or_else(|| format!("no profile named {src:?}"))?.clone();
         self.s.profiles.insert(name.to_string(), table);
+        let id = self.fresh_id();
+        self.s.ids.insert(name.to_string(), id);
         Ok(())
+    }
+
+    /// The permanent id of a profile (`None` for the base profile or an unknown name).
+    pub fn profile_id(&self, name: &str) -> Option<String> {
+        if name == self.s.default_name || !self.s.profiles.contains_key(name) {
+            return None;
+        }
+        Some(self.s.ids.get(name).cloned().unwrap_or_else(|| crate::config::derive_id(name)))
+    }
+
+    /// A new random id that no profile (including the shipped ones) uses.
+    fn fresh_id(&self) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let id = crate::config::derive_id(&format!("{t}-{n}-{}", std::process::id()));
+            let used = self.s.ids.values().chain(self.defaults.profile_ids.values()).any(|x| *x == id);
+            if !used {
+                return id;
+            }
+        }
     }
 
     /// The base profile cannot be deleted (rename it instead).
@@ -313,6 +349,7 @@ impl Editor {
         } // or it would come back
         self.s.profiles.shift_remove(name);
         self.s.profile_combos.shift_remove(name);
+        self.s.ids.remove(name);
         if self.s.current == name {
             self.s.current = self.s.default_name.clone();
         }
@@ -324,6 +361,12 @@ impl Editor {
         if !self.s.profiles.contains_key(old) {
             return Err(format!("no profile named {old:?}"));
         }
+        if new.trim().is_empty() {
+            return Err("type a name".into());
+        }
+        let old_id = self.profile_id(old);
+        // whatever was typed is converted to lowercase snake_case (the id stays, so games using this profile keep it)
+        let new = &crate::config::snake_name(new);
         if new == old {
             return Ok(());
         }
@@ -338,6 +381,10 @@ impl Editor {
             .collect();
         if let Some(c) = self.s.profile_combos.shift_remove(old) {
             self.s.profile_combos.insert(new.to_string(), c);
+        }
+        if let Some(id) = old_id {
+            self.s.ids.remove(old);
+            self.s.ids.insert(new.to_string(), id);
         }
         if old == self.s.default_name {
             self.s.default_name = new.to_string();
@@ -411,7 +458,7 @@ impl Editor {
         let mut data: Table = s
             .raw
             .iter()
-            .filter(|(k, _)| !["bindings", "combos", "profiles"].contains(&k.as_str()))
+            .filter(|(k, _)| !["bindings", "combos", "profiles", "profile_ids"].contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         data.insert("toggle".into(), Value::String(s.toggle.clone()));
@@ -431,7 +478,10 @@ impl Editor {
             );
         }
         let base = &s.profiles[&s.default_name];
-        let shipped_base = self.defaults.profile_bindings(&self.defaults.default_name);
+        // With use_defaults = false the shipped bindings are not underneath: write everything that is set.
+        let use_defaults = s.raw.get("use_defaults").and_then(Value::as_bool).unwrap_or(true);
+        let shipped_base =
+            if use_defaults { self.defaults.profile_bindings(&self.defaults.default_name) } else { Default::default() };
         let changed: Table = all_controls()
             .iter()
             .filter(|c| base[c.name()] != shipped_base.get(c.name()).cloned().unwrap_or_default())
@@ -450,7 +500,7 @@ impl Editor {
             if *name == s.default_name {
                 continue;
             }
-            let shipped: Table2 = if !s.deleted.contains(name) {
+            let shipped: Table2 = if use_defaults && !s.deleted.contains(name) {
                 self.defaults
                     .profiles
                     .get(name)
@@ -479,6 +529,18 @@ impl Editor {
         }
         if !profiles.is_empty() {
             data.insert("profiles".into(), Value::Table(profiles));
+        }
+        // ids of the profiles that exist (the base has none)
+        let ids: Table = s
+            .profiles
+            .keys()
+            .filter(|n| **n != s.default_name)
+            .filter_map(|n| s.ids.get(n).map(|i| (n.clone(), Value::String(i.clone()))))
+            .collect();
+        if !ids.is_empty() {
+            data.insert("profile_ids".into(), Value::Table(ids));
+        } else {
+            data.remove("profile_ids");
         }
         data
     }

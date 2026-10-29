@@ -190,6 +190,19 @@ impl Mapper {
     }
 
     pub fn map(&mut self, snap: &InputSnapshot, now: f64) -> ControllerState {
+        // A non-finite mouse delta (another `Cursor` impl) must not poison the smoothing filter.
+        let clean;
+        let snap = if snap.mouse_dx.is_finite() && snap.mouse_dy.is_finite() {
+            snap
+        } else {
+            let fin = |v: f64| if v.is_finite() { v } else { 0.0 };
+            clean = InputSnapshot {
+                pressed: snap.pressed.clone(),
+                mouse_dx: fin(snap.mouse_dx),
+                mouse_dy: fin(snap.mouse_dy),
+            };
+            &clean
+        };
         let dt = self.last_t.map_or(0.0, |t| (now - t).max(0.0));
         self.last_t = Some(now);
 
@@ -472,10 +485,10 @@ impl Mapper {
             self.mx = 0.0;
             self.my = 0.0;
         }
-        let dy = if m.invert_y { -snap.mouse_dy } else { snap.mouse_dy };
+        let (mdx, dy) = (snap.mouse_dx, if m.invert_y { -snap.mouse_dy } else { snap.mouse_dy });
         let step = if dt > 0.0 { dt } else { REF_DT }; // first tick after a reset: one reference tick
         let scale = REF_DT / step * m.sensitivity * 10.0; // sensitivity keeps its meaning at any loop rate
-        let (tx, ty) = (snap.mouse_dx * scale, dy * scale);
+        let (tx, ty) = (mdx * scale, dy * scale);
         let tau = smoothing_tau(m.smoothing);
         let alpha = if tau <= 0.0 { 1.0 } else { 1.0 - (-step / tau).exp() };
         self.mx += (tx - self.mx) * alpha;

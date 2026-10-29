@@ -3,6 +3,7 @@
 
 use crate::pipeline::Pipeline;
 use crate::vt::Frame as Picture;
+use crate::vt::OutputFormat;
 use openps_core::events::MediaSink;
 use openps_core::sync::LockExt;
 use openps_stream::audio::OpusFrame;
@@ -23,11 +24,24 @@ pub struct DecodingMedia {
     pictures: Arc<dyn PictureSink>,
     rest: Option<Arc<dyn MediaSink>>,
     keyframe: AtomicBool,
+    /// Deliver BGRA (for the Metal renderer) instead of the native format.
+    bgra: AtomicBool,
 }
 
 impl DecodingMedia {
     pub fn new(pictures: Arc<dyn PictureSink>, rest: Option<Arc<dyn MediaSink>>) -> Self {
-        Self { pipeline: Mutex::new(Pipeline::new()), pictures, rest, keyframe: AtomicBool::new(false) }
+        Self {
+            pipeline: Mutex::new(Pipeline::new()),
+            pictures,
+            rest,
+            keyframe: AtomicBool::new(false),
+            bgra: AtomicBool::new(false),
+        }
+    }
+
+    /// Choose the decoder's output format for the next session.
+    pub fn set_bgra(&self, on: bool) {
+        self.bgra.store(on, Ordering::Relaxed);
     }
 
     pub fn counters(&self) -> crate::pipeline::Counters {
@@ -40,6 +54,7 @@ impl MediaSink for DecodingMedia {
         // a new session always starts with a fresh decoder: nothing carries over from the previous stream
         let mut p = self.pipeline.lock_ok();
         *p = Pipeline::new();
+        p.set_output(if self.bgra.load(Ordering::Relaxed) { OutputFormat::Bgra } else { OutputFormat::Native });
         if let Err(e) = p.configure(info) {
             self.pictures.unavailable(&format!("cannot start video decoder: {e}"));
         }

@@ -61,7 +61,11 @@ pub mod live {
             let resp = match result {
                 Ok(resp) => resp,
                 Err(ureq::Error::Status(_, resp)) => resp, // error statuses are data, not failures
-                Err(ureq::Error::Transport(t)) => return Err(io::Error::other(t.to_string())),
+                // Never `t.to_string()`: ureq puts the full request URL into it, and some URLs carry a token.
+                Err(ureq::Error::Transport(t)) => {
+                    let msg = t.message().unwrap_or("transport error");
+                    return Err(io::Error::other(format!("{:?}: {msg}", t.kind())));
+                }
             };
             let status = resp.status();
             let headers = resp
@@ -70,7 +74,11 @@ pub mod live {
                 .filter_map(|n| resp.header(&n).map(|v| (n.clone(), v.to_string())))
                 .collect();
             let mut body = vec![];
-            io::Read::read_to_end(&mut resp.into_reader().take(1 << 20), &mut body)?;
+            const CAP: u64 = 1 << 20;
+            io::Read::read_to_end(&mut resp.into_reader().take(CAP + 1), &mut body)?;
+            if body.len() as u64 > CAP {
+                return Err(io::Error::other("response body larger than 1 MiB"));
+            }
             Ok(HttpResponse { status, headers, body })
         }
     }

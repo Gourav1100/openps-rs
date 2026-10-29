@@ -71,7 +71,9 @@ impl Backend for RealBackend {
     fn wake(&self, device: DeviceType, ip: IpAddr, regist_key_hex: &str) -> Result<bool, String> {
         openps_discovery::wake(device, ip, regist_key_hex, 10, Duration::from_millis(250), None)
             .map_err(|e| e.to_string())?;
-        openps_discovery::wait_until_ready(device, ip, device.wake_timeout(), None).map_err(|e| e.to_string())
+        // The original waits 25 s (PS5) / 40 s (PS4). A real PS5 answers after about 13 s (measured), so 20 s / 30 s leaves a margin and
+        // still fails sooner: the user is told to retry instead of staring at a spinner.
+        openps_discovery::wait_until_ready(device, ip, device.wake_timeout() * 4 / 5, None).map_err(|e| e.to_string())
     }
 
     fn register(&self, host: &str, params: &RegisterParams) -> Result<Registered, ClientError> {

@@ -130,8 +130,12 @@ pub struct KeyPosTracker {
 impl KeyPosTracker {
     /// Returns the 64-bit CTR offset for an inbound packet: keyPos + 2^32*wrap + 16.
     pub fn offset(&mut self, key_pos: u32) -> u64 {
-        let kp = key_pos as i64;
-        if kp - (self.last as i64) < -4_000_000_000 {
+        let diff = key_pos as i64 - self.last as i64;
+        if diff > 4_000_000_000 && self.wrap > 0 {
+            // Late packet from before the last wrap: use the previous epoch, leave state untouched.
+            return key_pos as u64 + (self.wrap.wrapping_sub(1) << 32) + 16;
+        }
+        if diff < -4_000_000_000 {
             self.wrap += 1;
         }
         self.last = key_pos as u64;
@@ -191,7 +195,7 @@ mod tests {
         (0..n).map(f).collect()
     }
 
-    /// Vectors produced by BouncyCastle 1.85 (the jar openPS ships) for the same inputs.
+    /// Vectors produced by BouncyCastle 1.85 (the jar OpenPS ships) for the same inputs.
     #[test]
     fn gmac_matches_bouncycastle() {
         let key: [u8; 16] = seq(|i| (i * 3 + 1) as u8, 16).try_into().unwrap();

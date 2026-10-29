@@ -177,11 +177,33 @@ pub fn reason_text(code: &str) -> &'static str {
     }
 }
 
+/// What to try, for a refusal. Most refusals of a correct request are one of three things the user can fix.
+pub fn rejection_hint(status: u16, reason: &str) -> &'static str {
+    match reason.to_ascii_lowercase().as_str() {
+        "80108b10" => "Someone else is using Remote Play on this console. Try again when they have finished.",
+        "80108b11" => "Update the console's system software, then try again.",
+        "80108b12" => "Turn on Remote Play in the console's settings.",
+        // The request is built the way the original builds it (40 captures of the original's own requests decode with our code, and the
+        // running app's wire bytes decode with the typed PIN and the stored account id), so a refusal comes from what the console holds:
+        // the code, or which PSN account it accepts. The original maps b09 to "check your PIN" and bff to "credentials are incorrect".
+        "80108bff" => {
+            "The console did not accept the credentials. Check: (1) you are using a NEW 8-digit code (open Link Device again; codes expire after a few minutes); \
+(2) the PlayStation Network account you signed in with here is the account that is signed in on the console (and, if you have several users on it, the one you chose for Remote Play)."
+        }
+        "" | "80108b02" | "80108b09" if status == 403 || status == 401 => {
+            "Check that: (1) the 8-digit code is current, since it expires after a few minutes (open Link Device again for a new one); \
+(2) the PlayStation Network account you signed in with here is a user that is signed in on the console; \
+(3) the console type (PS4 or PS5) is the right one."
+        }
+        _ => "",
+    }
+}
+
 pub fn parse_response(cipher: &RpCipher, resp: &Response) -> Result<Registered, RegisterError> {
     if !resp.ok() {
         return Err(RegisterError::Rejected {
             status: resp.status,
-            reason: resp.header("RP-Application-Reason").unwrap_or("").to_string(),
+            reason: crate::session::clean_reason(resp.header("RP-Application-Reason").unwrap_or("")),
         });
     }
     if resp.body.is_empty() {
@@ -386,5 +408,33 @@ mod tests {
             assert!(!text.contains("SECRET"), "{text}");
             assert!(text.contains("Den") && text.contains("<redacted>"), "{text}");
         }
+    }
+
+    #[test]
+    fn a_refusal_names_its_code_and_says_what_to_check() {
+        use crate::client::ClientError;
+        let e = ClientError::Register(RegisterError::Rejected { status: 403, reason: "80108b02".into() }).to_string();
+        assert!(
+            e.contains("HTTP 403, code 80108b02") && e.contains("wrong PSN id") && e.contains("code is current"),
+            "{e}"
+        );
+        // no reason header at all: still helpful, no empty ", code"
+        let e = ClientError::Register(RegisterError::Rejected { status: 403, reason: String::new() }).to_string();
+        assert!(e.contains("HTTP 403)") && !e.contains("code ,") && e.contains("signed in on the console"), "{e}");
+        // specific codes get their own advice, not the generic one
+        let e = ClientError::Register(RegisterError::Rejected { status: 403, reason: "80108b11".into() }).to_string();
+        assert!(e.contains("Update the console") && !e.contains("8-digit"), "{e}");
+        // a server error has no hint
+        let e = ClientError::Register(RegisterError::Rejected { status: 500, reason: String::new() }).to_string();
+        assert!(!e.contains("Check that"), "{e}");
+    }
+
+    #[test]
+    fn wrong_credentials_lists_both_the_code_and_the_account() {
+        use crate::client::ClientError;
+        let e = ClientError::Register(RegisterError::Rejected { status: 403, reason: "80108bff".into() }).to_string();
+        assert!(e.contains("code 80108bff") && e.contains("NEW 8-digit code"), "{e}");
+        assert!(e.contains("account that is signed in on the console"), "{e}");
+        assert!(!e.contains("almost always"), "no overconfident diagnosis: {e}");
     }
 }

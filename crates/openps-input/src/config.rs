@@ -135,6 +135,8 @@ pub struct Config {
     pub profile_slots: Vec<String>,
     pub default_name: String,
     pub deleted_profiles: Vec<String>,
+    /// Permanent ids of profiles by name (see `id_of`).
+    pub profile_ids: BTreeMap<String, String>,
     pub bindings: BTreeMap<String, Vec<String>>,
     pub combos: Vec<Combo>,
     pub profiles: IndexMap<String, Profile>,
@@ -152,14 +154,14 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             use_defaults: true,
-            poll_hz: 500,
+            poll_hz: 1000,
             toggle: "F10".into(),
             quit: "F12".into(),
-            profile_key: "F11".into(),
+            profile_key: "F7".into(),
             overlay_key: "F8".into(),
             overlay: true,
-            panic_key: "F9".into(),
-            target_app: "openPS".into(),
+            panic_key: "F11".into(),
+            target_app: "OpenPS".into(),
             feedback_sounds: true,
             close_target_on_exit: true,
             start_enabled: false,
@@ -167,6 +169,7 @@ impl Default for Config {
             profile_slots: (1..=6).map(|n| format!("LEFT_COMMAND+F{n}")).collect(),
             default_name: "default".into(),
             deleted_profiles: vec![],
+            profile_ids: BTreeMap::new(),
             bindings: BTreeMap::new(),
             combos: vec![],
             profiles: IndexMap::new(),
@@ -181,11 +184,70 @@ impl Default for Config {
     }
 }
 
+/// Profile names are lowercase snake_case: letters a-z, digits and single underscores, 1 to 32 characters.
 pub fn valid_profile_name(n: &str) -> bool {
-    (1..=32).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    (1..=32).contains(&n.len())
+        && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !n.starts_with('_')
+        && !n.ends_with('_')
+        && !n.contains("__")
+}
+
+/// Whatever was typed, as a valid profile name: `AssassinsCreed` and `Assassin's Creed 2` become `assassins_creed` and `assassin_s_creed_2`.
+pub fn snake_name(raw: &str) -> String {
+    let mut out = String::new();
+    let mut prev_lower = false;
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && prev_lower {
+                out.push('_'); // a camelCase boundary
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else if !out.ends_with('_') {
+            out.push('_');
+            prev_lower = false;
+        }
+    }
+    let t = out.trim_matches('_');
+    let mut t: String = t.chars().take(32).collect();
+    while t.ends_with('_') {
+        t.pop();
+    }
+    if t.is_empty() {
+        "profile".into()
+    } else {
+        t
+    }
+}
+
+/// An id for a profile that has none written: stable for a given name (so a plain file keeps working), `p_` and 8 hex digits.
+pub fn derive_id(name: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in name.bytes() {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    format!("p_{h:08x}")
+}
+
+pub fn valid_profile_id(id: &str) -> bool {
+    id.len() == 10 && id.starts_with("p_") && id[2..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 impl Config {
+    /// The permanent id of a profile (derived from its name when none was written). The base profile has none: games without a choice use it.
+    pub fn id_of(&self, name: &str) -> Option<String> {
+        if name == self.default_name || !self.profiles.contains_key(name) {
+            return None;
+        }
+        Some(self.profile_ids.get(name).cloned().unwrap_or_else(|| derive_id(name)))
+    }
+
+    /// The profile that has this id, if it still exists.
+    pub fn name_of_id(&self, id: &str) -> Option<String> {
+        self.profiles.keys().find(|n| self.id_of(n).as_deref() == Some(id)).cloned()
+    }
+
     pub fn profile_names(&self) -> Vec<String> {
         std::iter::once(self.default_name.clone()).chain(self.profiles.keys().cloned()).collect()
     }
@@ -328,14 +390,27 @@ impl Config {
             return Err("profile_slots has at most 12 entries".into());
         }
         if !valid_profile_name(&self.default_name) {
-            return Err(format!("bad default_name {:?}: use 1-32 letters, digits, '_' or '-'", self.default_name));
+            return Err(format!(
+                "bad default_name {:?}: use 1-32 lowercase letters, digits and '_'",
+                self.default_name
+            ));
         }
         if self.profiles.contains_key(&self.default_name) {
             return Err(format!("{:?} is the base [bindings]; name the profile otherwise", self.default_name));
         }
         for name in self.profiles.keys() {
             if !valid_profile_name(name) {
-                return Err(format!("bad profile name {name:?}: use 1-32 letters, digits, '_' or '-'"));
+                return Err(format!("bad profile name {name:?}: use 1-32 lowercase letters, digits and '_'"));
+            }
+        }
+        let mut seen = BTreeMap::new();
+        for name in self.profiles.keys() {
+            let id = self.id_of(name).unwrap_or_default();
+            if !valid_profile_id(&id) {
+                return Err(format!("bad id {id:?} for profile {name:?}"));
+            }
+            if let Some(other) = seen.insert(id.clone(), name.clone()) {
+                return Err(format!("profiles {other:?} and {name:?} have the same id {id}"));
             }
         }
         for c in &self.profile_slots {
@@ -350,6 +425,15 @@ impl Config {
                 if ca.is_subset(cb) || cb.is_subset(ca) {
                     return Err(format!("hotkeys {a} and {b} overlap"));
                 }
+            }
+        }
+        for (name, chord) in &keys {
+            if let Some(i) = chord.iter().find(|i| matches!(i, Input::Mouse(m) if m.name().starts_with("SCROLL_") || m.name().starts_with("MOUSE_MOVE_"))) {
+                return Err(format!(
+                    "{} cannot be used as the {} hotkey: scrolling and mouse movement cannot trigger a hotkey (use a key or a mouse button)",
+                    i.name(),
+                    name.replace('_', " ")
+                ));
             }
         }
         let reserved = self.reserved_inputs()?;
@@ -387,7 +471,52 @@ fn normalise_bindings(raw: &Value, where_: &str) -> Result<Value, String> {
     Ok(Value::Table(out))
 }
 
+/// Rename the keys of a table to snake_case profile names; a second name that collides gets `_2`, `_3`, ... Returns old -> new.
+fn snake_keys(t: &mut Table) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    let mut out = Table::new();
+    for (k, v) in std::mem::take(t) {
+        if k.trim().is_empty() {
+            out.insert(k, v); // left as it is: validation rejects it
+            continue;
+        }
+        let mut n = snake_name(&k);
+        let mut i = 2;
+        while out.contains_key(&n) {
+            let suffix = format!("_{i}");
+            n = format!("{}{suffix}", snake_name(&k).chars().take(32 - suffix.len()).collect::<String>());
+            i += 1;
+        }
+        map.insert(k, n.clone());
+        out.insert(n, v);
+    }
+    *t = out;
+    map
+}
+
 fn normalise(mut data: Table) -> Result<Table, String> {
+    // profile names are lowercase snake_case: older files with other spellings are read as the converted names
+    let mut renamed = BTreeMap::new();
+    if let Some(Value::Table(p)) = data.get_mut("profiles") {
+        renamed = snake_keys(p);
+    }
+    if let Some(Value::Table(ids)) = data.get_mut("profile_ids") {
+        for (k, v) in std::mem::take(ids) {
+            ids.insert(renamed.get(&k).cloned().unwrap_or_else(|| snake_name(&k)), v);
+        }
+    }
+    if let Some(Value::Array(a)) = data.get_mut("deleted_profiles") {
+        for x in a.iter_mut() {
+            if let Some(s) = x.as_str() {
+                *x = Value::String(snake_name(s));
+            }
+        }
+    }
+    if let Some(Value::String(s)) = data.get_mut("default_name") {
+        if !s.trim().is_empty() {
+            *s = snake_name(s);
+        }
+    }
     if let Some(b) = data.get("bindings") {
         let n = normalise_bindings(b, "bindings")?;
         data.insert("bindings".into(), n);
@@ -420,7 +549,47 @@ fn merge(base: &Table, over: &Table) -> Table {
     out
 }
 
-fn parse_table(text: &str, name: &str) -> Result<Table, String> {
+/// Deepest `[`/`{` nesting outside strings and comments (cheap lexical scan).
+fn bracket_depth(text: &str) -> usize {
+    let (mut depth, mut max) = (0usize, 0usize);
+    let (mut quote, mut escaped, mut comment) = (None::<char>, false, false);
+    for c in text.chars() {
+        if comment {
+            comment = c != '\n';
+            continue;
+        }
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' && q == '"' {
+                escaped = true;
+            } else if c == q || c == '\n' {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '#' => comment = true,
+            '"' | '\'' => quote = Some(c),
+            '[' | '{' => {
+                depth += 1;
+                max = max.max(depth);
+            }
+            ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    max
+}
+
+/// Deeper nesting than any real config needs is refused up front: the TOML parser recurses and a few thousand
+/// brackets overflow a small thread stack (an uncatchable abort in unoptimised builds).
+const MAX_NESTING: usize = 64;
+
+pub(crate) fn parse_table(text: &str, name: &str) -> Result<Table, String> {
+    if bracket_depth(text) > MAX_NESTING {
+        return Err(format!("{name}: brackets are nested more than {MAX_NESTING} levels deep"));
+    }
     text.parse::<Table>().map_err(|e| format!("{name}: {e}"))
 }
 
@@ -429,7 +598,76 @@ pub fn load_defaults() -> Result<Config, String> {
 }
 
 /// Defaults, then the user layer text on top. `migrate` drops bindings now reserved (implicit user file).
+/// Older versions closed the app with F9 (which macOS's Metal HUD also uses) and cycled profiles with F11. The app is now closed with
+/// F11 and profiles cycle with F7. A user file that still has the old pair is read as the new one (only for the implicit user file).
+pub fn migrate_hotkeys(text: &str) -> String {
+    let code_of = |l: &str| l.split('#').next().unwrap_or("").replace(' ', "");
+    let line = |k: &str, v: &str| text.lines().any(|l| code_of(l) == format!("{k}=\"{v}\""));
+    // A target key that another line of the file already uses is never taken: the migration must not create an overlap.
+    let uses = |key: &str, except: &[&str]| {
+        text.lines().any(|l| {
+            let c = code_of(l);
+            c.ends_with(&format!("=\"{key}\"")) && !except.iter().any(|e| c.starts_with(e))
+        })
+    };
+    let profile_to_f7 = line("profile_key", "F11")
+        && (!text.contains("panic_key") || line("panic_key", "F9"))
+        && !uses("F7", &["profile_key="]);
+    let except: &[&str] = if profile_to_f7 { &["panic_key=", "profile_key="] } else { &["panic_key="] };
+    let panic_to_f11 = line("panic_key", "F9") && !uses("F11", except);
+    if panic_to_f11 || profile_to_f7 {
+        text.lines()
+            .map(|l| {
+                let code = code_of(l);
+                if panic_to_f11 && code == "panic_key=\"F9\"" {
+                    "panic_key = \"F11\"".to_string()
+                } else if profile_to_f7 && code == "profile_key=\"F11\"" {
+                    "profile_key = \"F7\"".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        text.to_string()
+    }
+}
+
+/// The text the implicit user file is really loaded from: the migrated one, unless the migration would make a
+/// file that loads today fail (then the old text is kept, so the app still starts).
+pub fn migrated_text(text: &str) -> String {
+    let m = migrate_hotkeys(text);
+    let loads = |t: &str| load_layers_inner(Some(t), true).is_ok();
+    if loads(&m) {
+        return m;
+    }
+    if m != text && loads(text) {
+        return text.to_string(); // the old file is fine as it is
+    }
+    // The old profile key (F11) is now the quit key's neighbour: move it to the first free F-key instead of failing.
+    let old_profile = |l: &str| l.split('#').next().unwrap_or("").replace(' ', "") == "profile_key=\"F11\"";
+    if m.lines().any(old_profile) {
+        for n in [7, 8, 10, 9, 6, 5, 4, 3, 2, 1] {
+            let cand = m
+                .lines()
+                .map(|l| if old_profile(l) { format!("profile_key = \"F{n}\"") } else { l.to_string() })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if loads(&cand) {
+                return cand;
+            }
+        }
+    }
+    m
+}
+
 pub fn load_layers(user_text: Option<&str>, migrate: bool) -> Result<Config, String> {
+    let migrated = user_text.filter(|_| migrate).map(migrated_text);
+    load_layers_inner(migrated.as_deref().or(user_text), migrate)
+}
+
+fn load_layers_inner(user_text: Option<&str>, migrate: bool) -> Result<Config, String> {
     let user = match user_text {
         Some(t) => normalise(parse_table(t, "user config")?)?,
         None => Table::new(),

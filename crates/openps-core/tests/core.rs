@@ -5,7 +5,7 @@ use openps_core::control::{ControlCommand, ControlLink};
 use openps_core::events::{AppEvent, MediaSink, VecSink};
 use openps_core::store::ConsoleStore;
 use openps_core::types::*;
-use openps_core::{Core, CoreBuilder, CoreError, PsnService};
+use openps_core::{Core, CoreBuilder, CoreError, PsnService, RemoteRegistrar, RemoteRequest};
 use openps_crypto::RpCipher;
 use openps_discovery::{Console, DeviceType, Status};
 use openps_psn::store::{MemoryStore, SecretStore};
@@ -65,6 +65,7 @@ struct Fake {
     register_calls: Mutex<Vec<(String, u32, u64, String)>>, // host, pin, account id, version
     wakes: Mutex<Vec<(DeviceType, IpAddr, String)>>,
     control_error: Mutex<Option<ClientError>>,
+    control_calls: std::sync::atomic::AtomicUsize,
     prohibited: AtomicBool,
     control_version: Mutex<Option<&'static str>>,
     /// Consoles serving the next `open_links` call.
@@ -96,6 +97,7 @@ impl Backend for Fake {
         _: &Registered,
         _: StreamingType,
     ) -> Result<Box<dyn ControlLink>, ClientError> {
+        self.control_calls.fetch_add(1, Ordering::Relaxed);
         if let Some(e) = self.control_error.lock().unwrap().take() {
             return Err(e);
         }
@@ -191,6 +193,13 @@ impl PsnService for FakePsn {
     fn sign_out(&self) {
         self.signed_out.store(true, Ordering::Relaxed);
     }
+    fn remote_access_token(&self) -> Result<String, String> {
+        if self.fail.load(Ordering::Relaxed) {
+            Err("your PlayStation sign-in has expired: sign in again".into())
+        } else {
+            Ok("REMOTE-TOKEN".into())
+        }
+    }
 }
 
 #[derive(Default)]
@@ -237,7 +246,7 @@ fn build(
     media: Arc<Frames>,
     psn: Option<Arc<dyn PsnService>>,
 ) -> Core {
-    Core::new(CoreBuilder {
+    let core = Core::new(CoreBuilder {
         store: ConsoleStore::open(dir.path().join("state.json")).unwrap(),
         secrets,
         backend: fake,
@@ -246,7 +255,10 @@ fn build(
         media,
         settle_s: 0.0,
         senkusha: SenkushaConfig { io_timeout_s: 0.02, attempts: 2, retry_delay_s: 0.01, ..Default::default() },
-    })
+    });
+    // tests must not depend on the network of the machine they run on: Auto bitrate knows nothing unless a test says otherwise
+    core.set_auto_bitrate_probe(|_| None);
+    core
 }
 
 fn registered(device: DeviceType) -> Registered {
@@ -544,7 +556,25 @@ fn a_protocol_version_downgrade_found_during_setup_is_remembered() {
 fn settings_are_validated_persisted_and_survive_restart() {
     let r = rig();
     assert_eq!(r.core.settings(), None, "nothing saved until the user changes something");
-    let o = StreamOptions { width: 1920, height: 1080, fps: 60, bitrate: 15000, hevc: true, hdr: false, volume: 35 };
+    let o = StreamOptions {
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        bitrate: 15000,
+        hevc: true,
+        hdr: false,
+        volume: 35,
+        upscale: "1440p".into(),
+        display_fps: 144,
+        frame_gen: 20,
+        frame_mode: "smooth".into(),
+        camera_comp: true,
+        framegen: "builtin".into(),
+        sharpness: 50,
+        saturation: 100,
+        show_prompts: false,
+        settings_version: 2,
+    };
     r.core.set_settings(o.clone()).unwrap();
     assert_eq!(r.core.settings(), Some(o.clone()));
     // rejected values change nothing
@@ -748,4 +778,204 @@ fn text_from_the_network_is_cleaned_and_bounded_before_it_is_stored_or_shown() {
     }];
     let found = r.core.scan(&[]).unwrap();
     assert!(found[0].name.chars().count() <= 64 && !found[0].name.chars().any(char::is_control), "{:?}", found[0].name);
+}
+
+// ---- Auto bitrate: ask for what the link carries, retry once with the default if that fails before connecting ---------------------
+#[test]
+fn a_failed_attempt_with_a_large_auto_request_is_retried_once_with_the_default() {
+    let r = rig();
+    let rec = paired(&r);
+    let asked = Arc::new(Mutex::new(vec![]));
+    let a2 = asked.clone();
+    r.core.set_auto_bitrate_probe(move |host| {
+        a2.lock().unwrap().push(host.to_string());
+        Some(800_000)
+    });
+    r.fake.serve.store(true, Ordering::Relaxed);
+    *r.fake.frames_to_send.lock().unwrap() = 1;
+    *r.fake.control_error.lock().unwrap() = Some(ClientError::Http("first attempt refused".into())); // only the first call fails
+    r.core.connect(&rec.id, StreamOptions { bitrate: -1, ..Default::default() }).unwrap();
+    assert!(
+        wait_state(&r, Duration::from_secs(15), |s| matches!(s, SessionState::Connected { .. })),
+        "{:?}",
+        r.events.states()
+    );
+    assert_eq!(r.fake.control_calls.load(Ordering::Relaxed), 2, "one retry");
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec!["10.0.0.9".to_string()],
+        "the link was looked at once, for the console's address"
+    );
+    assert!(
+        !r.events.states().iter().any(|s| matches!(s, SessionState::Failed { .. })),
+        "the user must not see the first failure: {:?}",
+        r.events.states()
+    );
+    r.core.disconnect().unwrap();
+    assert!(r.core.wait_idle(Duration::from_secs(10)));
+    r.fake.stop.store(true, Ordering::Relaxed);
+    r.core.shutdown();
+}
+
+#[test]
+fn no_retry_when_auto_asked_for_nothing_special_or_the_bitrate_was_chosen() {
+    // auto but nothing known about the link: the default was already used, a second try would change nothing
+    let r = rig();
+    let rec = paired(&r);
+    *r.fake.control_error.lock().unwrap() = Some(ClientError::Http("down".into()));
+    r.core.connect(&rec.id, StreamOptions { bitrate: -1, ..Default::default() }).unwrap();
+    assert!(r.core.wait_idle(Duration::from_secs(5)));
+    assert_eq!(r.fake.control_calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(r.core.session_state(), SessionState::Failed { .. }));
+    // an explicit bitrate is never second-guessed, even if a probe would have a number
+    let r = rig();
+    let rec = paired(&r);
+    let probed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let p2 = probed.clone();
+    r.core.set_auto_bitrate_probe(move |_| {
+        p2.store(true, Ordering::Relaxed);
+        Some(800_000)
+    });
+    *r.fake.control_error.lock().unwrap() = Some(ClientError::Http("down".into()));
+    r.core.connect(&rec.id, StreamOptions { bitrate: 6000, ..Default::default() }).unwrap();
+    assert!(r.core.wait_idle(Duration::from_secs(5)));
+    assert_eq!(r.fake.control_calls.load(Ordering::Relaxed), 1);
+    assert!(!probed.load(Ordering::Relaxed), "an explicit bitrate does not even look at the link");
+    assert!(matches!(r.core.session_state(), SessionState::Failed { .. }));
+}
+
+// ---- registering over the internet (spec 09) -----------------------------------------------------------------------------------------
+struct FakeRegistrar {
+    seen: Mutex<Vec<(String, u64, String)>>,
+    outcome: Mutex<Result<Registered, String>>,
+    /// Block until cancelled (to test cancel and overlap).
+    wait_for_cancel: AtomicBool,
+    started: AtomicBool,
+}
+
+impl RemoteRegistrar for FakeRegistrar {
+    fn register(
+        &self,
+        req: RemoteRequest,
+        cancel: Arc<AtomicBool>,
+        progress: &dyn Fn(&str),
+    ) -> Result<Registered, String> {
+        self.seen.lock().unwrap().push((req.access_token, req.account_id, req.duid));
+        progress("Connecting to PlayStation Network");
+        self.started.store(true, Ordering::Relaxed);
+        if self.wait_for_cancel.load(Ordering::Relaxed) {
+            let end = Instant::now() + Duration::from_secs(5);
+            while !cancel.load(Ordering::Relaxed) && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return Err("cancelled".into());
+        }
+        self.outcome.lock().unwrap().clone()
+    }
+}
+
+fn registrar(outcome: Result<Registered, String>) -> Arc<FakeRegistrar> {
+    Arc::new(FakeRegistrar {
+        seen: Mutex::default(),
+        outcome: Mutex::new(outcome),
+        wait_for_cancel: AtomicBool::new(false),
+        started: AtomicBool::new(false),
+    })
+}
+
+fn signed_in(r: &Rig) {
+    r.core.psn_complete("https://x/redirect?code=1").unwrap();
+}
+
+#[test]
+fn a_remote_registration_is_saved_like_a_local_one_with_the_keys_only_in_the_secret_store() {
+    let r = rig();
+    signed_in(&r);
+    let reg = registrar(Ok(Registered {
+        device: DeviceType::Ps5,
+        mac: "98fa2e70c0e7".into(),
+        nickname: "PS5-591".into(),
+        regist_key: "3a3b3c3d3e3f4041".into(),
+        rp_key: "00112233445566778899aabbccddeeff".into(),
+        ap_name: "PS5".into(),
+    }));
+    r.core.set_remote_registrar(reg.clone());
+    assert!(r.core.remote_available());
+    let rec = r.core.register_remote("00000007aabb").unwrap();
+    assert_eq!(
+        (rec.id.as_str(), rec.nickname.as_str(), rec.version.as_str(), rec.host.clone()),
+        ("98FA2E70C0E7", "PS5-591", "1.0", None)
+    );
+    // the registrar got the token, the account id (unsigned 64-bit) and the console id
+    assert_eq!(*reg.seen.lock().unwrap(), vec![("REMOTE-TOKEN".to_string(), u64::MAX, "00000007aabb".to_string())]);
+    let k = ConsoleStore::get_secrets(&*r.secrets, "98FA2E70C0E7").expect("keys stored");
+    assert_eq!((k.regist_key.as_str(), k.rp_key.len()), ("3a3b3c3d3e3f4041", 32));
+    assert!(
+        !std::fs::read_to_string(r.dir.path().join("state.json")).unwrap().contains("3a3b3c3d"),
+        "keys never reach the state file"
+    );
+    assert_eq!(r.core.consoles().len(), 1);
+    assert!(r.events.events().iter().any(|e| matches!(e, AppEvent::Control { kind, detail } if kind == "remote_step" && detail.contains("PlayStation Network"))));
+    assert!(r.events.events().iter().any(|e| matches!(e, AppEvent::ConsolesChanged)));
+}
+
+#[test]
+fn a_failed_or_unusable_remote_registration_stores_nothing() {
+    let r = rig();
+    signed_in(&r);
+    // the registrar fails
+    r.core.set_remote_registrar(registrar(Err("could not reach your console".into())));
+    let e = r.core.register_remote("00000007aabb").unwrap_err();
+    assert!(e.to_string().contains("could not reach your console"), "{e}");
+    assert!(r.core.consoles().is_empty());
+    // it "succeeds" but the console reported no usable id
+    let bad = Registered {
+        device: DeviceType::Ps5,
+        mac: "".into(),
+        nickname: "x".into(),
+        regist_key: "aa".into(),
+        rp_key: "bb".into(),
+        ap_name: "".into(),
+    };
+    r.core.set_remote_registrar(registrar(Ok(bad)));
+    assert!(r.core.register_remote("00000007aabb").unwrap_err().to_string().contains("usable id"));
+    assert!(r.core.consoles().is_empty());
+    // and the next attempt is allowed (the running marker was cleared)
+    r.core.set_remote_registrar(registrar(Err("again".into())));
+    assert!(r.core.register_remote("00000007aabb").is_err());
+}
+
+#[test]
+fn remote_registration_needs_a_sign_in_a_valid_id_and_a_registrar() {
+    let r = rig();
+    assert!(!r.core.remote_available());
+    assert!(r.core.register_remote("abc").unwrap_err().to_string().contains("not available"));
+    r.core.set_remote_registrar(registrar(Err("x".into())));
+    assert!(matches!(r.core.register_remote("abc"), Err(CoreError::NeedsPsnLogin)), "not signed in to PSN");
+    signed_in(&r);
+    for bad in ["", &"a".repeat(200), "has space", "new\nline", "é"] {
+        assert!(r.core.register_remote(bad).unwrap_err().to_string().contains("not a console id"), "{bad:.10?}");
+    }
+    r.psn.fail.store(true, Ordering::Relaxed); // the token cannot be refreshed
+    assert!(r.core.register_remote("abc").unwrap_err().to_string().contains("sign in again"));
+}
+
+#[test]
+fn only_one_remote_registration_runs_at_a_time_and_cancel_reaches_it() {
+    let r = rig();
+    signed_in(&r);
+    let reg = registrar(Err("unused".into()));
+    reg.wait_for_cancel.store(true, Ordering::Relaxed);
+    r.core.set_remote_registrar(reg.clone());
+    let core = r.core.clone();
+    let t = std::thread::spawn(move || core.register_remote("00000007aabb"));
+    let end = Instant::now() + Duration::from_secs(3);
+    while !reg.started.load(Ordering::Relaxed) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(r.core.register_remote("00000007aabb").unwrap_err().to_string().contains("already running"));
+    r.core.cancel_remote();
+    let e = t.join().unwrap().unwrap_err();
+    assert!(e.to_string().contains("cancelled"), "{e}");
+    r.core.cancel_remote(); // nothing running: harmless
 }

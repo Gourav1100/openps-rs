@@ -104,19 +104,11 @@ pub fn regist_patch(t: &KeyTables, family: Family, ps5_device: bool, nonce: &[u8
 pub(crate) mod testutil {
     use crate::tables::KeyTables;
 
-    /// Real tables are not in the repository. Tests that need them look at `$OPENPS_TABLES`, then at the
-    /// out-of-tree default `analysis/tables/tables.json`, and skip (loudly) if neither exists.
+    /// The tables the program is built with (or `$OPENPS_TABLES` if set).
     pub fn tables() -> Option<KeyTables> {
-        if let Some(r) = KeyTables::from_env() {
-            return Some(r.expect("OPENPS_TABLES is set but invalid"));
-        }
-        let default = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../analysis/tables/tables.json");
-        match KeyTables::load(&default) {
-            Ok(t) => Some(t),
-            Err(_) => {
-                eprintln!("SKIPPED: key tables not available (run extract-tables, set OPENPS_TABLES)");
-                None
-            }
+        match KeyTables::from_env() {
+            Some(r) => Some(r.expect("OPENPS_TABLES is set but invalid")),
+            None => Some(KeyTables::builtin()),
         }
     }
 

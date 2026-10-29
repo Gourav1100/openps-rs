@@ -4,13 +4,22 @@
 //! are missing the frame is recovered with `openps-fec`. Frames are delivered in order; when an out-of-order
 //! frame completes and the in-flight window is exhausted, the gap is skipped and reported (CorruptFrame).
 
-use crate::seq::{is_older, next_id, reached};
+use crate::seq::{self, is_older, next_id, reached};
 use std::collections::{BTreeMap, VecDeque};
 
-pub const MAX_BLOCK: usize = 65000;
+/// Largest plausible unit (pad header + payload): a Takion datagram never exceeds the 1454 B path MTU.
+pub const MAX_BLOCK: usize = 1536;
 pub const MAX_UNITS: usize = 512;
 /// Hard cap on frames being assembled; a flood of distinct frame ids must not grow memory without bound.
 pub const MAX_PENDING_FRAMES: usize = 32;
+/// Hard cap on the bytes held by incomplete frames.
+pub const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+/// A complete frame further than this many ids ahead of the cursor is implausible (forged or bogus) and is
+/// not delivered; it counts as an anomaly (see `RESYNC_ANOMALIES`).
+pub const MAX_AHEAD: i32 = 256;
+/// Consecutive anomalous (late or implausibly far ahead) frame ids, with no normal unit in between, after
+/// which the assembler assumes the id space changed, resets itself and asks for a keyframe.
+pub const RESYNC_ANOMALIES: u32 = 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -49,10 +58,11 @@ struct Pending {
     m: usize,
     block: usize,
     adaptive: u8,
-    units: Vec<Option<Vec<u8>>>, // k source then m parity, each `block` bytes (source zero-padded)
-    real: Vec<usize>,            // received length of each source unit
+    /// k source then m parity units, each stored at its received length (padded lazily, only for FEC).
+    units: Vec<Option<Vec<u8>>>,
     src: usize,
     par: usize,
+    bytes: usize,
 }
 
 impl Pending {
@@ -64,21 +74,12 @@ impl Pending {
     }
 
     fn add(&mut self, index: usize, payload: &[u8]) -> bool {
-        if index > self.k + self.m
-            || payload.len() > self.block
-            || index >= self.units.len()
-            || self.units[index].is_some()
-        {
+        if index >= self.units.len() || payload.len() > self.block || self.units[index].is_some() {
             return false;
         }
-        if index >= self.k && index - self.k >= self.m {
-            return false;
-        }
-        let mut buf = vec![0u8; self.block];
-        buf[..payload.len()].copy_from_slice(payload);
-        self.units[index] = Some(buf);
+        self.units[index] = Some(payload.to_vec());
+        self.bytes += payload.len();
         if index < self.k {
-            self.real[index] = payload.len();
             self.src += 1;
         } else {
             self.par += 1;
@@ -92,28 +93,39 @@ impl Pending {
             if self.k + self.m > 256 {
                 return None;
             } // w = 8 cannot code more than 256 units
-            let mut blocks = self.units.clone();
+            let block = self.block;
+            let mut blocks: Vec<Option<Vec<u8>>> = self
+                .units
+                .iter()
+                .map(|o| {
+                    o.as_ref().map(|v| {
+                        let mut b = Vec::with_capacity(block);
+                        b.extend_from_slice(v);
+                        b.resize(block, 0);
+                        b
+                    })
+                })
+                .collect();
             openps_fec::decode(self.k, self.m, &mut blocks).ok()?;
             for (i, slot) in blocks.iter_mut().enumerate().take(self.k) {
                 if self.units[i].is_none() {
-                    let b = slot.take()?;
-                    let pad = u16::from_be_bytes([b[0], b[1]]) as usize;
-                    if pad > self.block {
+                    let mut b = slot.take()?;
+                    let pad = u16::from_be_bytes([*b.first()?, *b.get(1)?]) as usize;
+                    if pad > block {
                         return None;
                     }
-                    self.real[i] = self.block - pad;
+                    b.truncate(block - pad);
                     self.units[i] = Some(b);
                 }
             }
         }
-        let mut data = vec![];
-        for i in 0..self.k {
-            let u = self.units[i].as_ref()?;
-            let end = self.real[i];
-            if end < 2 {
-                return None;
-            }
-            data.extend(&u[2..end]);
+        let mut total = 0;
+        for u in self.units.iter().take(self.k) {
+            total += u.as_ref()?.len().checked_sub(2)?;
+        }
+        let mut data = Vec::with_capacity(total);
+        for u in self.units.iter().take(self.k) {
+            data.extend_from_slice(&u.as_ref()?[2..]);
         }
         let starts = self.units[0].as_ref().is_some_and(|u| u.len() >= 6 && u[2..6] == [0, 0, 0, 1]);
         Some(Frame { id: self.id as u16, adaptive_index: self.adaptive, data, starts_with_start_code: starts })
@@ -125,6 +137,10 @@ pub struct VideoAssembler {
     cursor: i32,
     last_delivered: i32,
     frames: BTreeMap<i32, Pending>,
+    pending_bytes: usize,
+    anomalies: u32,
+    last_anomaly_id: i32,
+    resync: bool,
     out: VecDeque<Frame>,
     /// (received, missed) units since the last telemetry sample
     tel_received: u32,
@@ -140,6 +156,10 @@ impl VideoAssembler {
             cursor: -1,
             last_delivered: -1,
             frames: BTreeMap::new(),
+            pending_bytes: 0,
+            anomalies: 0,
+            last_anomaly_id: -1,
+            resync: false,
             out: VecDeque::new(),
             tel_received: 0,
             tel_missed: 0,
@@ -158,18 +178,54 @@ impl VideoAssembler {
         self.cursor = -1;
         self.last_delivered = -1;
         self.frames.clear();
+        self.pending_bytes = 0;
+        self.anomalies = 0;
         self.out.clear();
+    }
+
+    /// True once (then cleared) after the assembler gave up on the current id sequence and reset itself;
+    /// the caller should request a keyframe.
+    pub fn take_resync(&mut self) -> bool {
+        std::mem::take(&mut self.resync)
+    }
+
+    /// Remove a frame and keep the byte accounting right.
+    fn remove_frame(&mut self, id: i32) -> Option<Pending> {
+        let p = self.frames.remove(&id)?;
+        self.pending_bytes = self.pending_bytes.saturating_sub(p.bytes);
+        Some(p)
+    }
+
+    fn recount(&mut self) {
+        self.pending_bytes = self.frames.values().map(|p| p.bytes).sum();
+    }
+
+    fn anomaly(&mut self, id: i32, outcome: Outcome) -> Outcome {
+        if id != self.last_anomaly_id {
+            self.last_anomaly_id = id;
+            self.anomalies += 1;
+            if self.anomalies >= RESYNC_ANOMALIES {
+                self.reset();
+                self.resync = true;
+            }
+        }
+        outcome
     }
 
     pub fn push(&mut self, u: &Unit) -> Outcome {
         let id = u.frame_id as i32;
         let late = id != self.cursor && self.cursor != -1 && is_older(self.last_delivered, id);
         if late {
-            return Outcome::Late;
+            return self.anomaly(id, Outcome::Late);
         }
-        if u.total_units < u.fec_units {
+        // k == 0 (no source units) and an index outside the frame are malformed
+        if u.total_units <= u.fec_units || u.unit_index >= u.total_units {
             return Outcome::Invalid;
         }
+        if self.cursor != -1 && id != self.cursor && seq::modp(id - self.cursor) > MAX_AHEAD {
+            return self.anomaly(id, Outcome::Invalid);
+        }
+        self.anomalies = 0;
         let (k, m) = ((u.total_units - u.fec_units) as usize, (u.fec_units as usize).max(1));
         if !self.frames.contains_key(&id) {
             let first_is_source = (u.unit_index as usize) < k;
@@ -197,21 +253,31 @@ impl VideoAssembler {
                     block,
                     adaptive: u.adaptive_index,
                     units: vec![None; k + m],
-                    real: vec![0; k],
                     src: 0,
                     par: 0,
+                    bytes: 0,
                 },
             );
         }
-        let frame = self.frames.get_mut(&id).unwrap();
-        if !frame.add(u.unit_index as usize, u.payload) || !frame.ready() {
+        if self.pending_bytes + u.payload.len() > MAX_PENDING_BYTES {
+            self.evict();
+            if self.pending_bytes + u.payload.len() > MAX_PENDING_BYTES {
+                return Outcome::Pending;
+            }
+        }
+        let Some(frame) = self.frames.get_mut(&id) else { return Outcome::Pending };
+        let before = frame.bytes;
+        let added = frame.add(u.unit_index as usize, u.payload);
+        let ready = frame.ready();
+        self.pending_bytes += frame.bytes - before;
+        if !added || !ready {
             return Outcome::Pending;
         }
         self.deliver_ready(id)
     }
 
     fn deliver(&mut self, id: i32) {
-        if let Some(p) = self.frames.remove(&id) {
+        if let Some(p) = self.remove_frame(id) {
             self.tel_received += p.received() as u32;
             if let Some(f) = p.finish() {
                 self.out.push_back(f);
@@ -272,7 +338,7 @@ impl VideoAssembler {
         let cur = self.cursor;
         let stale: Vec<i32> = self.frames.keys().copied().filter(|f| !reached(*f, cur)).collect();
         for f in stale {
-            if let Some(p) = self.frames.remove(&f) {
+            if let Some(p) = self.remove_frame(f) {
                 self.tel_received += p.received() as u32;
                 self.tel_missed += (p.k.saturating_sub(p.received())) as u32;
             }
@@ -286,16 +352,18 @@ impl VideoAssembler {
         if self.cursor != -1 {
             let cur = self.cursor;
             self.frames.retain(|f, _| reached(*f, cur));
+            self.recount();
         }
-        if self.frames.len() >= MAX_PENDING_FRAMES {
+        if self.frames.len() >= MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES / 2 {
             self.frames.clear();
+            self.pending_bytes = 0;
         }
     }
 
     fn discard_before(&mut self, id: i32) {
         let skipped: Vec<i32> = self.frames.keys().copied().filter(|f| *f != id && !reached(*f, id)).collect();
         for f in skipped {
-            if let Some(p) = self.frames.remove(&f) {
+            if let Some(p) = self.remove_frame(f) {
                 self.tel_received += p.received() as u32;
                 self.tel_missed += p.k.saturating_sub(p.received()) as u32;
             }
@@ -312,7 +380,7 @@ impl VideoAssembler {
             let cur = self.cursor;
             let old: Vec<i32> = self.frames.keys().copied().filter(|f| !reached(*f, cur)).collect();
             for f in old {
-                let p = self.frames.remove(&f).unwrap();
+                let Some(p) = self.remove_frame(f) else { continue };
                 self.tel_received += p.received() as u32;
                 self.tel_missed += p.k.saturating_sub(p.received()) as u32;
             }

@@ -102,12 +102,34 @@ pub struct FileStore {
 impl FileStore {
     pub fn open(path: impl Into<std::path::PathBuf>) -> Result<Self, String> {
         let path = path.into();
-        let map = match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        };
+        let map = Self::read(&path)?;
         Ok(Self { path, map: Mutex::new(map) })
+    }
+
+    fn read(path: &std::path::Path) -> Result<HashMap<String, String>, String> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Atomic read-modify-write shared with other processes (several processes may use the same file): take an
+    /// exclusive advisory lock on a sidecar file, re-read the file, apply `change`, write it back. Returns the new map.
+    fn update(&self, change: impl FnOnce(&mut HashMap<String, String>)) -> Result<HashMap<String, String>, String> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let lock = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.path.with_extension("lock"))
+            .map_err(|e| e.to_string())?;
+        lock.lock().map_err(|e| e.to_string())?; // released when `lock` is dropped
+        let mut map = Self::read(&self.path)?;
+        change(&mut map);
+        self.flush(&map)?;
+        Ok(map)
     }
 
     fn flush(&self, map: &HashMap<String, String>) -> Result<(), String> {
@@ -115,41 +137,52 @@ impl FileStore {
         use std::os::unix::fs::OpenOptionsExt;
         let tmp = self.path.with_extension("tmp");
         let json = serde_json::to_vec(map).map_err(|e| e.to_string())?;
+        // A stale or planted temp file (loose mode, symlink) must not be reused: remove it, then create exclusively.
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
         let mut f = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(&tmp)
             .map_err(|e| e.to_string())?;
         f.write_all(&json).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        if let Some(dir) = self.path.parent() {
+            let dir = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+            if let Ok(d) = std::fs::File::open(dir) {
+                let _ = d.sync_all(); // best effort: make the rename durable
+            }
+        }
+        Ok(())
     }
 }
 
 impl SecretStore for FileStore {
     fn get(&self, key: &str) -> Option<String> {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
+        let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        // Another process may have changed the file: prefer a fresh read, fall back to the last good copy.
+        if let Ok(fresh) = Self::read(&self.path) {
+            *m = fresh;
+        }
+        m.get(key).cloned()
     }
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
         let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        let old = m.insert(key.into(), value.into());
-        self.flush(&m).inspect_err(|_| {
-            // keep memory and disk consistent if the write failed
-            match old {
-                Some(o) => m.insert(key.into(), o),
-                None => m.remove(key),
-            };
-        })
+        *m = self.update(|m| {
+            m.insert(key.into(), value.into());
+        })?;
+        Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), String> {
         let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        let old = m.remove(key);
-        self.flush(&m).inspect_err(|_| {
-            if let Some(o) = old {
-                m.insert(key.into(), o);
-            }
-        })
+        *m = self.update(|m| {
+            m.remove(key);
+        })?;
+        Ok(())
     }
 }
 

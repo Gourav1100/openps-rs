@@ -2,7 +2,7 @@
 //! rebuilds on format changes, and turns decode trouble into rate-limited keyframe requests.
 
 use crate::nal::{self, Codec, ParameterSets};
-use crate::vt::{Decoder, Error, Frame};
+use crate::vt::{Decoder, Error, Frame, OutputFormat};
 use openps_stream::video::Frame as AccessUnit;
 use openps_takion::proto::StreamInfoPayload;
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ pub struct Pipeline {
     codec: Option<Codec>,
     last_request: Option<Instant>,
     last_id: Option<u16>,
+    output: OutputFormat,
     pub counters: Counters,
 }
 
@@ -41,7 +42,19 @@ impl Default for Pipeline {
 
 impl Pipeline {
     pub fn new() -> Self {
-        Pipeline { decoder: None, codec: None, last_request: None, last_id: None, counters: Counters::default() }
+        Pipeline {
+            decoder: None,
+            codec: None,
+            last_request: None,
+            last_id: None,
+            output: OutputFormat::Native,
+            counters: Counters::default(),
+        }
+    }
+
+    /// What the decoder delivers (takes effect at the next `configure`).
+    pub fn set_output(&mut self, output: OutputFormat) {
+        self.output = output;
     }
 
     pub fn codec(&self) -> Option<Codec> {
@@ -62,7 +75,7 @@ impl Pipeline {
     pub fn configure_header(&mut self, header: &[u8]) -> Result<Codec, Error> {
         let codec = nal::detect_codec(header).ok_or(Error::ParameterSets(-2))?;
         let params = ParameterSets::from_annex_b(codec, header);
-        self.decoder = Some(Decoder::new(codec, params)?);
+        self.decoder = Some(Decoder::new_with(codec, params, self.output)?);
         self.codec = Some(codec);
         self.last_id = None;
         Ok(codec)

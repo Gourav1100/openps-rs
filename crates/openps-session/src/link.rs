@@ -33,9 +33,35 @@ struct UdpSource {
     buf: Vec<u8>,
 }
 
+/// Errors on a connected UDP socket that say "this datagram did not get through right now" rather than
+/// "the link is broken": ICMP port-unreachable (`ECONNREFUSED`), `EINTR`, `ENOBUFS`, and host/network
+/// unreachable (Wi-Fi roam). The idle timeout in the runner ends a session that is really dead.
+fn is_transient(e: &io::Error) -> bool {
+    if matches!(
+        e.kind(),
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::Interrupted
+    ) {
+        return true;
+    }
+    // (ENETUNREACH, EHOSTUNREACH, ENOBUFS) per platform
+    #[cfg(target_os = "macos")]
+    const TRANSIENT: [i32; 3] = [51, 65, 55];
+    #[cfg(not(target_os = "macos"))]
+    const TRANSIENT: [i32; 3] = [101, 113, 105];
+    e.raw_os_error().is_some_and(|c| TRANSIENT.contains(&c))
+}
+
 impl PacketSink for UdpSink {
     fn send(&mut self, data: &[u8]) -> io::Result<()> {
-        self.0.send(data).map(|_| ())
+        match self.0.send(data) {
+            Ok(_) => Ok(()),
+            // UDP is lossy by contract: the protocol layers retransmit what matters
+            Err(e) if is_transient(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -44,10 +70,9 @@ impl PacketSource for UdpSource {
         self.socket.set_read_timeout(Some(timeout.max(Duration::from_millis(1))))?;
         match self.socket.recv(&mut self.buf) {
             Ok(n) => Ok(Some(self.buf[..n].to_vec())),
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => Ok(None),
-            // ICMP "port unreachable" from an earlier send surfaces here on a connected UDP socket. It is
-            // transient (the console may not be listening yet), so treat it as "nothing received".
-            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => Ok(None),
+            // Includes ICMP "port unreachable" from an earlier send, which surfaces here on a connected UDP
+            // socket; the console may simply not be listening yet.
+            Err(e) if is_transient(&e) => Ok(None),
             Err(e) => Err(e),
         }
     }

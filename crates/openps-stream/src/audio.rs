@@ -88,6 +88,14 @@ impl AudioAssembler {
         out
     }
 
+    /// Count the source units of a packet for the congestion sample without decrypting or decoding it
+    /// (`disable_audio`). Ids are bounded to 65536 entries like the decoding path.
+    pub fn note_unit_ids(&mut self, frame_id: u16, source_units: u8) {
+        for i in 0..source_units as i32 {
+            self.window.insert(wrap16(frame_id as i32 + i));
+        }
+    }
+
     /// (received, lost) for the 1 s congestion sample: lost = gaps between the lowest and highest id seen.
     pub fn take_sample(&mut self) -> (u32, u32) {
         let received = self.window.len() as u32;

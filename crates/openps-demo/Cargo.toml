@@ -9,6 +9,7 @@ publish = false
 openps-core = { path = "../openps-core" }
 openps-crypto = { path = "../openps-crypto" }
 openps-discovery = { path = "../openps-discovery" }
+openps-psn = { path = "../openps-psn" }
 openps-rp = { path = "../openps-rp" }
 openps-session = { path = "../openps-session" }
 openps-takion = { path = "../openps-takion" }
@@ -18,5 +19,4 @@ openps-video = { path = "../openps-video" }
 [dev-dependencies]
 openps-audio = { path = "../openps-audio" }
 tempfile = "3"
-openps-psn = { path = "../openps-psn" }
 openps-stream = { path = "../openps-stream" }

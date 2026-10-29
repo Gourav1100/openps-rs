@@ -31,6 +31,7 @@ pub struct StreamStats {
     pub kbps: f64,
     pub video_frames_dropped: u64,
     pub datagrams_in: u64,
+    pub datagrams_out: u64,
 }
 
 pub trait EventSink: Send + Sync {

@@ -130,7 +130,7 @@ impl<'a> AudioPacket<'a> {
                 return Err(PacketError::BadUnits);
             }
             let payload = &b[28..];
-            let unit_size = (payload.len() / total as usize) as u8;
+            let unit_size = u8::try_from(payload.len() / total as usize).map_err(|_| PacketError::BadUnits)?;
             let src = total.min(1);
             return Ok(Self {
                 packet_id: u32be(b, 5),
@@ -150,7 +150,7 @@ impl<'a> AudioPacket<'a> {
         let fec = u16be(b, 7);
         let unit_size = (fec >> 8) as u8;
         let need = unit_size as usize * total as usize;
-        if total == 0 || b.len() < need {
+        if total == 0 || b.len() < hdr + need {
             return Err(PacketError::BadUnits);
         }
         let off = b.len() - need; // leading extra bytes are dropped

@@ -134,6 +134,24 @@ fn token_request(cfg: &PsnConfig, body: Vec<u8>) -> HttpRequest {
     }
 }
 
+/// Text from the network that ends up on screen: no control, bidi-override, zero-width or line-separator characters,
+/// at most `max` characters, trimmed.
+pub(crate) fn clean_text(s: &str, max: usize) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+    };
+    s.chars()
+        .filter(|c| !hidden(*c))
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 pub fn exchange_code_request(cfg: &PsnConfig, code: &str) -> HttpRequest {
     token_request(
         cfg,

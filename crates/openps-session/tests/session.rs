@@ -92,7 +92,8 @@ fn send_frame(con: &mut StreamConsole, link: &mut Link, id: u16, lose: &[usize])
     let data = frame_data(900, id as u8);
     for (i, u) in encode_frame(&data, 4, 2).iter().enumerate() {
         if !lose.contains(&i) {
-            link.sink.send(&con.video(VERSION, id, i as u16, 6, 2, u)).unwrap();
+            // the client may already have hung up (test teardown): a closed peer is not a failure of the console under test
+            let _ = link.sink.send(&con.video(VERSION, id, i as u16, 6, 2, u));
         }
     }
     data
@@ -501,4 +502,95 @@ fn a_session_thread_that_dies_is_detectable_instead_of_silent() {
     // no terminal notice was ever produced: this is exactly the case the caller has to detect via `has_stopped`
     assert!(h.recv_timeout(Duration::from_millis(50)).is_none_or(|n| !n.is_terminal()));
     h.join(); // must not hang
+}
+
+// ---- input latency ---------------------------------------------------------------------------------------------------------
+/// Time from `set_pad` to the datagram's arrival at the console, for stick changes sent 20 ms apart.
+fn measure_input_latency(load_threads: usize, video_flood: bool) -> Vec<f64> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let (client, server) = mem_pair();
+    let arrivals: Arc<Mutex<Vec<Instant>>> = Default::default();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (a2, s2) = (arrivals.clone(), stop.clone());
+    let console = console(server, move |mut con, link| {
+        let mut id = 0u16;
+        let mut next_frame = Instant::now();
+        while !s2.load(Ordering::Relaxed) {
+            if video_flood && Instant::now() >= next_frame {
+                send_frame(&mut con, link, id, &[]);
+                id = id.wrapping_add(1);
+                next_frame += Duration::from_micros(6944); // 144 frames per second of 900-byte frames
+            }
+            if let Ok(Some(d)) = link.source.recv(Duration::from_micros(500)) {
+                if d[0] & 0x0F == 6 {
+                    a2.lock().unwrap().push(Instant::now());
+                }
+            }
+        }
+    });
+    let h = connect(client, params());
+    wait_for(&h, Duration::from_secs(5), |n| matches!(n, Notice::Connected { .. }));
+    // CPU pressure: threads spinning flat out, like a busy renderer and decoder
+    let spin = Arc::new(AtomicBool::new(true));
+    let burners: Vec<_> = (0..load_threads)
+        .map(|_| {
+            let s = spin.clone();
+            std::thread::spawn(move || {
+                let mut x = 1u64;
+                while s.load(Ordering::Relaxed) {
+                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    std::hint::black_box(x);
+                }
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    arrivals.lock().unwrap().clear();
+    let mut sent = vec![];
+    for i in 0..150 {
+        let st = ControllerState { left_x: if i % 2 == 0 { 0.8 } else { -0.8 }, ..Default::default() };
+        sent.push(Instant::now());
+        h.set_pad(0, st);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    spin.store(false, Ordering::Relaxed);
+    for b in burners {
+        b.join().unwrap();
+    }
+    stop.store(true, Ordering::Relaxed);
+    h.disconnect();
+    wait_terminal(&h, Duration::from_secs(5));
+    h.join();
+    console.join().unwrap();
+    let arr = arrivals.lock().unwrap().clone();
+    // first arrival after each send
+    sent.iter()
+        .filter_map(|t| arr.iter().find(|a| **a >= *t).map(|a| a.duration_since(*t).as_secs_f64() * 1e3))
+        .collect()
+}
+
+fn pct(v: &mut [f64], p: f64) -> f64 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v[((v.len() - 1) as f64 * p) as usize]
+}
+
+#[test]
+fn pad_input_reaches_the_wire_within_milliseconds_even_under_heavy_load() {
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+    for (label, threads, flood, p50_max, p99_max) in [
+        ("idle", 0, false, 2.0, 6.0),
+        ("video flood at 144 fps", 0, true, 2.0, 8.0),
+        // the tail with every core busy is the OS scheduler's, and depends on what else the machine runs (measured 5.9 ms on a
+        // quiet machine, 38-52 ms next to a busy WindowServer); the median stays strict, the tail only has to stay sane
+        ("every core saturated + video flood", cores, true, 3.0, 120.0),
+    ] {
+        let mut v = measure_input_latency(threads, flood);
+        assert!(v.len() >= 120, "{label}: only {} of 150 changes reached the console", v.len());
+        let (p50, p99, max) = (pct(&mut v, 0.5), pct(&mut v, 0.99), v.iter().cloned().fold(0.0, f64::max));
+        eprintln!("input latency [{label}]: p50 {p50:.2} ms, p99 {p99:.2} ms, max {max:.2} ms ({} samples)", v.len());
+        assert!(p50 < p50_max, "{label}: median {p50:.2} ms");
+        assert!(p99 < p99_max, "{label}: p99 {p99:.2} ms");
+    }
 }

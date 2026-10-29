@@ -1,5 +1,9 @@
 //! Launch specification JSON (spec 02 section 5.3; `LaunchSpecification.java`), byte-for-byte template.
 
+/// Highest bitrate Auto may request: 100 Mbit/s, the most the original accepts for a custom bitrate. Asking a real PS5 for 800 Mbit/s
+/// made it end the stream seconds after the start ("video send timeout").
+pub const MAX_AUTO_KBPS: i32 = 100_000;
+
 #[derive(Clone, Debug)]
 pub struct LaunchParams {
     pub width: i32,
@@ -7,6 +11,9 @@ pub struct LaunchParams {
     pub fps: i32,
     /// Requested bitrate in kbps, or -1 for auto.
     pub bitrate: i32,
+    /// For auto (`bitrate == -1`): what the link to the console can carry, in kbps (see `openps_core::netlink`). `None` keeps the
+    /// resolution-based default. Only used for auto; an explicit bitrate is never overridden.
+    pub auto_kbps: Option<i32>,
     pub mtu_in: i32,
     pub rtt_ms: i32,
     pub ps5: bool,
@@ -21,6 +28,7 @@ impl Default for LaunchParams {
             height: 720,
             fps: 60,
             bitrate: -1,
+            auto_kbps: None,
             mtu_in: 1454,
             rtt_ms: 2,
             ps5: true,
@@ -54,12 +62,16 @@ impl LaunchParams {
     }
     pub fn eff_bitrate(&self) -> i32 {
         match self.bitrate {
-            -1 => match self.width {
-                960 => 6000,
-                1280 => 10000,
-                1920 => 15000,
-                _ => 2000,
-            },
+            -1 => {
+                let default = match self.width {
+                    960 => 6000,
+                    1280 => 10000,
+                    1920 => 15000,
+                    _ => 2000,
+                };
+                // never below the resolution default, never above 1 Gbit/s
+                self.auto_kbps.map_or(default, |k| k.clamp(default, MAX_AUTO_KBPS))
+            }
             2000 | 6000 | 10000 | 15000 => self.bitrate,
             b if (2000..=100_000).contains(&b) => b,
             _ => 15000,
@@ -115,6 +127,22 @@ mod tests {
         assert_eq!(p.eff_bitrate(), 15000);
         p.width = 640;
         assert_eq!(p.eff_bitrate(), 2000);
+        // auto with a measured link: a large request, but never below the default and never above the cap
+        p.width = 1920;
+        p.auto_kbps = Some(60_000);
+        assert_eq!(p.eff_bitrate(), 60_000);
+        p.auto_kbps = Some(5_000_000);
+        assert_eq!(p.eff_bitrate(), MAX_AUTO_KBPS);
+        p.auto_kbps = Some(3000);
+        assert_eq!(p.eff_bitrate(), 15000, "not below the resolution default");
+        // an explicit choice is never overridden by the link
+        p.auto_kbps = Some(800_000);
+        p.bitrate = 6000;
+        p.auto_kbps = Some(60_000);
+        assert_eq!(p.eff_bitrate(), 6000);
+        p.bitrate = -1;
+        p.auto_kbps = None;
+        p.width = 640;
         p.mtu_in = 100;
         p.rtt_ms = 9999;
         assert_eq!((p.eff_mtu(), p.eff_rtt()), (1454, 2));

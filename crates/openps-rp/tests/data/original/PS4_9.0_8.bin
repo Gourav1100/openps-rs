@@ -1,0 +1,11 @@
+POST /sce/rp/regist HTTP/1.1
+HOST: 127.0.0.1:9295
+User-Agent: remoteplay Windows
+Connection: close
+RP-Version: 9.0
+Content-Length: 530
+Accept-Encoding: gzip
+
+Æx„™Ò>ÚÚFåî¿B¨sÐê3¤±>þOö^à/r“~­w,v‹{Î;ÙÓð•0­¼å¨F9Ù7Ê·eüîJwÌï¡{Õ´®8†¯ÔàoøVT~§-ýE/uáHz÷=4Uºx¿ÍýVˆhfE„”iüR”HÚ™Ë4`TžôáZPSdêúGkÜBän„dû¨ß÷²bFJz·ã`á@	à{Ý…ð­îá¡Ðl©1p½Wø3ÉÞàÔvuXFaô<‚‰à¤F…Yž0™§*DqìvéÀë°X‰2óó­s—ò‘Æ¡+ý€IOÑï^Y?Ç&vÚV#0ëö2¥úVGÞ>¤/™:ðu°#ÐÄ^ºTWý—ÏŸÅƒŽ›©÷Â¼ l^ð±ö…ƒ×ý¨R9È¹~"L(ú*U¦íµ%óW¶bSS¾ÐY3Ævn™Ûó\€Æ$³Ò{mº ‘å¬¡YŠéÙuPã¾E°cõ*'|›\”r6k¬=&œÄivt/fHœ?uå'2O&Áø>ÒÓbH9Þì
+D¥\“{ŽwÐ!¸Üx.çœ
+ºmÅVÒ„Ã¼<¸&ôÚ…‘x1–Ä÷»ÌìlÚúçûìDZKsè»öÑVM¢Ãè.WËùn×œÆiºH:;¥‘ÿá{Ou)&iŸÝîú
