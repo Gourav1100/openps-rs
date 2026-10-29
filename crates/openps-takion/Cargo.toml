@@ -1,0 +1,18 @@
+[package]
+name = "openps-takion"
+version.workspace = true
+edition.workspace = true
+description = "Takion wire protocol: protobuf messages, SCTP-like control chunks and the client handshake state machine (spec 02 sections 2, 5)"
+
+[dependencies]
+openps-crypto = { path = "../openps-crypto" }
+prost = "0.13"
+k256 = { version = "0.13", features = ["ecdh"] }
+p521 = { version = "0.13", features = ["ecdh"] }
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[dev-dependencies]
+openps-testkit = { path = "../openps-testkit" }

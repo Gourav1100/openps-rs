@@ -1,0 +1,15 @@
+[package]
+name = "openps-session"
+version.workspace = true
+edition.workspace = true
+description = "Session runtime: drives the sans-IO handshake and stream engine over a UDP link on a dedicated thread"
+
+[dependencies]
+openps-input = { path = "../openps-input" }
+openps-stream = { path = "../openps-stream" }
+openps-takion = { path = "../openps-takion" }
+socket2 = "0.5"
+
+[dev-dependencies]
+openps-testkit = { path = "../openps-testkit" }
+openps-crypto = { path = "../openps-crypto" }

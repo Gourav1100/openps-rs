@@ -1,0 +1,24 @@
+[package]
+name = "openps-core"
+version.workspace = true
+edition.workspace = true
+description = "Application core: console store, discovery/pairing/connect flows, control channel and event forwarding. No UI dependency."
+
+[dependencies]
+openps-crypto = { path = "../openps-crypto" }
+openps-discovery = { path = "../openps-discovery" }
+openps-input = { path = "../openps-input" }
+openps-psn = { path = "../openps-psn" }
+openps-rp = { path = "../openps-rp" }
+openps-session = { path = "../openps-session" }
+openps-stream = { path = "../openps-stream" }
+openps-takion = { path = "../openps-takion" }
+rand_core = { version = "0.6", features = ["getrandom"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+openps-testkit = { path = "../openps-testkit" }
+tempfile = "3"

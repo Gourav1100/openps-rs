@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>openPS</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body data-view="consoles" data-stream="off">
+
+<!-- Icon sprite: every icon in the app, referenced with <use href="#i-name"> -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 32 32"><path d="M9 6.5c0-1 .8-1.6 1.7-1.3l4.8 1.6v18.9l-4.1-1.3c-.9-.3-1.4-1-1.4-1.9zM17.5 8.9c4.4 1.4 7 3.2 7 7.2 0 3.3-1.9 4.6-4.2 3.9-.8-.2-1.5-.5-2.1-.8v-3.1c.9.4 1.6.5 2.1.3.6-.2.8-.7.8-1.4 0-1.2-.9-2-2.6-2.7zM5 22.8l8.3 2.6v2.3L5 25.2c-.9-.3-1.4-.8-1.4-1.4 0-.6.6-1.1 1.4-1z"/></symbol>
+    <symbol id="i-console" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 20h8M12 16v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-ps5" viewBox="0 0 48 48"><path d="M24 3c5.500 0 10 4.500 10 10v21c0 5.500-4.500 10-10 10s-10-4.500-10-10V13c0-5.500 4.500-10 10-10z" fill="currentColor"/><path d="M21 9.500c0-1.100.9-2 2-2h2c1.100 0 2 .9 2 2v26c0 1.100-.9 2-2 2h-2c-1.100 0-2-.9-2-2z" fill="#0b1020" opacity=".7"/><rect x="15" y="43" width="18" height="3" rx="1.500" fill="currentColor" opacity=".55"/></symbol>
+    <symbol id="i-ps4" viewBox="0 0 48 48"><path d="M8 33.500 36 40.500l4-3V15.500L12 8.500l-4 3z" fill="currentColor" opacity=".92"/><path d="M12 8.500l28 7M8 11.500l28 7v22" fill="none" stroke="currentColor" stroke-width="1.600" opacity=".45"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.300 5.700M20 4v7h-7" stroke="currentColor" stroke-width="1.900" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.200" fill="none" stroke="currentColor" stroke-width="1.700"/><path d="M12 3v2.500M12 18.500V21M3 12h2.500M18.500 12H21M5.600 5.600l1.800 1.800M16.600 16.600l1.800 1.800M5.600 18.400l1.800-1.800M16.600 7.400l1.800-1.800" stroke="currentColor" stroke-width="1.700" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.500-6 4 12 2.500-6H21" stroke="currentColor" stroke-width="1.900" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.700"/><path d="M12 11v5.500M12 7.600v.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.500v13l11-6.500z" fill="currentColor"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8M7 6.500a7.500 7.500 0 1 0 10 0" stroke="currentColor" stroke-width="1.900" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.500h6V7M6.500 7l1 13h9l1-13M10 11v6M14 11v6" stroke="currentColor" stroke-width="1.700" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="1.900" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9.500v5h3.500l5 4v-13l-5 4z" fill="currentColor"/><path d="M16 9a4.500 4.500 0 0 1 0 6M18.500 6.500a8 8 0 0 1 0 11" stroke="currentColor" stroke-width="1.700" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.500v5h3.500l5 4v-13l-5 4z" fill="currentColor"/><path d="M16 9.500l5 5M21 9.500l-5 5" stroke="currentColor" stroke-width="1.900" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.500l4.500 4.500L19 7.500" stroke="currentColor" stroke-width="2.200" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.500 20h19z" fill="none" stroke="currentColor" stroke-width="1.700" stroke-linejoin="round"/><path d="M12 10v4.500M12 17.200v.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.500" r="3.800" fill="none" stroke="currentColor" stroke-width="1.700"/><path d="M4.500 20c.8-3.600 3.800-5.500 7.500-5.500s6.700 1.900 7.500 5.500" stroke="currentColor" stroke-width="1.700" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.500" y="8.500" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.700"/><path d="M15.500 8.500V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.500a2 2 0 0 0 2 2h2.500" fill="none" stroke="currentColor" stroke-width="1.700"/></symbol>
+  </defs>
+</svg>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<div id="app">
+  <nav class="nav" aria-label="Primary">
+    <div class="brand"><svg class="logo" aria-hidden="true"><use href="#i-logo"/></svg><span class="brand-name">openPS</span></div>
+    <ul class="nav-list" role="list">
+      <li><button class="nav-btn" data-nav="consoles" aria-current="page"><svg aria-hidden="true"><use href="#i-console"/></svg><span>Consoles</span></button></li>
+      <li><button class="nav-btn" data-nav="settings"><svg aria-hidden="true"><use href="#i-gear"/></svg><span>Settings</span></button></li>
+      <li><button class="nav-btn" data-nav="activity"><svg aria-hidden="true"><use href="#i-pulse"/></svg><span>Activity</span></button></li>
+      <li><button class="nav-btn" data-nav="about"><svg aria-hidden="true"><use href="#i-info"/></svg><span>About</span></button></li>
+    </ul>
+  </nav>
+
+  <header class="top">
+    <h1 id="page-title">Consoles</h1>
+    <div class="top-actions">
+      <span id="demo-badge" class="chip chip-warn" hidden title="Talking to a built-in pretend console">Demo mode</span>
+      <span id="psn-chip" class="chip"><svg aria-hidden="true"><use href="#i-user"/></svg><span id="psn-text">PSN: signed out</span></span>
+      <button id="psn-btn" class="btn btn-ghost btn-sm" type="button">Sign in</button>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div id="banner" class="banner" role="alert" hidden></div>
+
+    <!-- Consoles -->
+    <section id="view-consoles" class="view" aria-labelledby="page-title">
+      <div class="section-head">
+        <div>
+          <h2>Your consoles</h2>
+          <p class="muted" id="consoles-sub">Paired consoles appear here.</p>
+        </div>
+        <div class="row-actions">
+          <button id="refresh-btn" class="btn btn-ghost" type="button"><svg aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span></button>
+          <button id="add-btn" class="btn btn-primary" type="button"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>Add console</span></button>
+        </div>
+      </div>
+      <div id="console-grid" class="grid" aria-live="polite"></div>
+      <div id="empty" class="empty" hidden>
+        <div class="empty-art" aria-hidden="true"><svg><use href="#i-ps5"/></svg></div>
+        <h3>No console paired yet</h3>
+        <p class="muted">Make sure your PlayStation is on (or in rest mode) and on the same network as this computer, then add it with the 8-digit code from its Remote Play settings.</p>
+        <button id="empty-add" class="btn btn-primary btn-lg" type="button"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>Add your console</span></button>
+      </div>
+      <div id="nearby-wrap" hidden>
+        <h2 class="mt">Nearby, not paired</h2>
+        <div id="nearby-grid" class="grid"></div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" class="view" aria-labelledby="page-title" hidden>
+      <div class="section-head"><div><h2>Stream quality</h2><p class="muted">Applied the next time you connect. Changes save automatically.</p></div></div>
+      <div class="card form">
+        <fieldset class="field"><legend>Resolution</legend><div class="seg" role="radiogroup" aria-label="Resolution" data-setting="height"></div></fieldset>
+        <fieldset class="field"><legend>Frame rate</legend><div class="seg" role="radiogroup" aria-label="Frame rate" data-setting="fps"></div></fieldset>
+        <fieldset class="field"><legend>Bitrate</legend><div class="seg" role="radiogroup" aria-label="Bitrate" data-setting="bitrate"></div></fieldset>
+        <fieldset class="field"><legend>Video codec</legend><div class="seg" role="radiogroup" aria-label="Video codec" data-setting="codec"></div>
+          <p class="hint" id="codec-hint"></p></fieldset>
+        <div class="field">
+          <label for="volume">Volume <output id="volume-out" for="volume">100%</output></label>
+          <input id="volume" class="range" type="range" min="0" max="100" step="5" value="100" aria-describedby="volume-hint">
+          <p class="hint" id="volume-hint">Changes apply immediately, even during a session.</p>
+        </div>
+        <div class="field switch-row">
+          <div><label id="hdr-label" for="hdr-switch">HDR</label><p class="hint">Needs HEVC and an HDR-capable display. PS5 only.</p></div>
+          <button id="hdr-switch" class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="hdr-label"><span class="knob"></span></button>
+        </div>
+      </div>
+      <p class="muted small mt">PS4 consoles always stream H.264 regardless of this setting.</p>
+    </section>
+
+    <!-- Activity -->
+    <section id="view-activity" class="view" aria-labelledby="page-title" hidden>
+      <div class="section-head"><div><h2>Activity</h2><p class="muted">What the app has been doing. Nothing here leaves your computer.</p></div>
+        <div class="row-actions">
+          <button id="log-copy" class="btn btn-ghost" type="button"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button>
+          <button id="log-clear" class="btn btn-ghost" type="button"><svg aria-hidden="true"><use href="#i-trash"/></svg><span>Clear</span></button>
+        </div></div>
+      <ol id="log" class="log" aria-label="Activity log"></ol>
+    </section>
+
+    <!-- About -->
+    <section id="view-about" class="view" aria-labelledby="page-title" hidden>
+      <div class="card about">
+        <div class="about-head"><svg class="logo big" aria-hidden="true"><use href="#i-logo"/></svg><div><h2>openPS</h2><p class="muted" id="about-version"></p></div></div>
+        <dl class="facts" id="about-facts"></dl>
+      </div>
+      <div class="card mt">
+        <h3>Keyboard</h3>
+        <dl class="facts">
+          <div><dt><kbd>F</kbd></dt><dd>Toggle full screen while streaming</dd></div>
+          <div><dt><kbd>M</kbd></dt><dd>Mute or unmute while streaming</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Show the stream controls / leave full screen</dd></div>
+          <div><dt><kbd>Tab</kbd></dt><dd>Move between controls; everything is reachable from the keyboard</dd></div>
+        </dl>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Session stage: connection progress, then the heads-up display over the video -->
+<section id="stage" class="stage" aria-label="Remote Play session" hidden>
+  <div id="connecting" class="connecting card" role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2 id="connecting-title">Connecting</h2>
+    <p class="muted" id="connecting-sub"></p>
+    <ol class="steps" id="steps">
+      <li data-step="0">Reaching the console</li>
+      <li data-step="1">Checking the network</li>
+      <li data-step="2">Securing the connection</li>
+      <li data-step="3">Starting the stream</li>
+    </ol>
+    <button id="cancel-connect" class="btn btn-ghost" type="button">Cancel</button>
+  </div>
+  <div id="hud" class="hud" hidden>
+    <div class="hud-bar">
+      <div class="hud-title"><span class="live-dot" aria-hidden="true"></span><strong id="hud-name"></strong></div>
+      <div class="hud-stats" id="hud-stats" aria-live="off"></div>
+      <div class="hud-actions">
+        <span id="hud-audio-warn" class="chip chip-warn" hidden><svg aria-hidden="true"><use href="#i-mute"/></svg><span>No sound</span></span>
+        <button id="mute-btn" class="btn btn-glass btn-icon" type="button" aria-label="Mute" aria-pressed="false" title="Mute"><svg aria-hidden="true"><use href="#i-volume"/></svg></button>
+        <button id="fs-btn" class="btn btn-glass btn-icon" type="button" aria-label="Toggle full screen" title="Full screen (F)"><svg aria-hidden="true"><use href="#i-expand"/></svg></button>
+        <button id="end-btn" class="btn btn-danger" type="button"><svg aria-hidden="true"><use href="#i-power"/></svg><span>Disconnect</span></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pairing wizard -->
+<dialog id="pair-dialog" aria-labelledby="pair-title">
+  <form method="dialog" id="pair-form" novalidate>
+    <header class="dlg-head"><h2 id="pair-title">Add a console</h2><button type="button" class="btn btn-ghost btn-icon" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-close"/></svg></button></header>
+    <ol class="wiz" aria-label="Progress"><li data-wiz="find">Find</li><li data-wiz="pin">Code</li><li data-wiz="done">Done</li></ol>
+
+    <div class="dlg-body" data-step="find">
+      <p class="muted">Choose the console you want to use, or enter its address if it is not listed.</p>
+      <div id="pair-list" class="pick" role="radiogroup" aria-label="Consoles found"></div>
+      <div class="field"><label for="pair-host">Address <span class="muted">(optional, e.g. 192.168.1.20)</span></label><input id="pair-host" class="input" inputmode="decimal" autocomplete="off" spellcheck="false" maxlength="45"></div>
+      <div class="field"><span class="label">Console type</span><div class="seg" id="pair-device" role="radiogroup" aria-label="Console type"></div></div>
+    </div>
+
+    <div class="dlg-body" data-step="pin" hidden>
+      <ol class="howto">
+        <li>On the PlayStation open <strong>Settings → System → Remote Play → Link Device</strong>.</li>
+        <li>Type the 8-digit code it shows here. It expires after a few minutes.</li>
+      </ol>
+      <div class="pin" id="pin" role="group" aria-label="8-digit code"></div>
+      <div id="psn-need" class="notice" hidden><svg aria-hidden="true"><use href="#i-alert"/></svg><div><strong>PS5 pairing needs your PlayStation Network account.</strong><div class="muted small">Sign in once; your account is only used to identify you to your own console.</div></div><button type="button" class="btn btn-primary btn-sm" id="pair-signin">Sign in</button></div>
+      <p id="pair-error" class="error" role="alert" hidden></p>
+    </div>
+
+    <div class="dlg-body center" data-step="done" hidden>
+      <div class="badge-ok" aria-hidden="true"><svg><use href="#i-check"/></svg></div>
+      <h3 id="done-title">Paired</h3>
+      <p class="muted" id="done-sub"></p>
+    </div>
+
+    <footer class="dlg-foot">
+      <button type="button" class="btn btn-ghost" id="pair-back" hidden>Back</button>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary" id="pair-next">Continue</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- Confirmation (destructive actions) -->
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+  <form method="dialog">
+    <header class="dlg-head"><h2 id="confirm-title"></h2></header>
+    <div class="dlg-body"><p id="confirm-body" class="muted"></p></div>
+    <footer class="dlg-foot"><span class="grow"></span><button class="btn btn-ghost" value="cancel" autofocus>Cancel</button><button class="btn btn-danger" value="ok" id="confirm-ok"></button></footer>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

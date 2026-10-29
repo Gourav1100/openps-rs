@@ -1,0 +1,12 @@
+[package]
+name = "openps-video"
+version.workspace = true
+edition.workspace = true
+description = "Video: Annex-B bitstream handling, hardware decode (VideoToolbox) and Metal presentation"
+build = "build.rs"
+
+[dependencies]
+openps-stream = { path = "../openps-stream" }
+openps-takion = { path = "../openps-takion" }
+openps-core = { path = "../openps-core" }
+objc2 = "0.6"

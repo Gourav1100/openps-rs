@@ -1,0 +1,122 @@
+# con2pc default mapping. Copy to your own file and pass with `-c`.
+# Names: see Key / MouseInput in src/con2pc/keys.py (digits are written 0-9 or KEY_0..KEY_9),
+# PS5 controls: see Button / Axis in src/con2pc/state.py.
+
+poll_hz = 500           # mapping loop rate; key/button presses also wake it at once
+overlay_opacity = 0.5   # F8 overlay opacity (0.1 - 1.0)
+toggle = "F10"      # start/stop mapping (any chord, e.g. "LEFT_CONTROL+F10")
+quit = "F12"
+profile_key = "F11"   # cycle to the next key profile on the fly
+panic_key = "F9"      # force-quit target_app, release the cursor, stop mapping and exit
+overlay_key = "F8"    # show/hide the key-map overlay on top of target_app (click a key to rebind)
+overlay = true
+close_target_on_exit = true   # Ctrl+C / F12 also close openPS when con2pc started it
+# Direct profile selection: Command + F1..F6 picks the 1st..6th profile (F11 still cycles).
+profile_slots = ["LEFT_COMMAND+F1", "LEFT_COMMAND+F2", "LEFT_COMMAND+F3",
+                 "LEFT_COMMAND+F4", "LEFT_COMMAND+F5", "LEFT_COMMAND+F6"]
+# Reserved (never bindable): every hotkey above and Command (profile slots, adaptive triggers).
+# Tab and Escape ARE bindable. Tab + left/right click still toggles RT/RB and LT/LB, and while
+# capturing a binding in F8, tapping Escape binds it and HOLDING Escape skips the capture.
+# Mapping only grabs the keyboard/cursor while this app is frontmost, so leaving the
+# stream (or closing it) hands your mouse back. "" = always live and panic kills nothing.
+target_app = "openPS"
+feedback_sounds = true  # short system sound on toggle / profile change
+start_enabled = false   # mapping starts OFF; press the toggle key to switch it on
+# While mapping is ON, no keyboard/mouse event reaches openPS (its own mouse/keyboard shortcuts
+# are neutralised). Needs Accessibility permission. F8-F12 hotkeys are always kept from the app.
+suppress_input = true
+
+[mouse]
+look = "RIGHT_STICK"     # RIGHT_STICK | LEFT_STICK | NONE
+sensitivity = 0.05
+smoothing = 0.6
+deadzone = 0.0
+invert_y = false
+capture_cursor = true    # lock the cursor to the centre of openPS while mapping is ON
+hide_cursor = true       # ...and hide it
+move_threshold = 3.0
+recenter_ms = 40         # stick returns to centre this long after the mouse stops
+
+# Keys bound to stick directions ramp like the mouse and re-centre on release.
+[output]
+min_press_ms = 35        # a tap never lasts less than this, so quick clicks are not missed
+
+# Command + hold a trigger's click (left click = RT, right click = LT): the value sweeps up and
+# down; release the click to LOCK the value, release Command to reset it.
+[adaptive_triggers]
+enabled = true
+sweep_ms = 1200
+# Fixed (not configurable): Command + left click drives LT and Command + right click drives RT,
+# whatever the clicks are bound to. Without Command a left click is RT and a right click is LT.
+
+[keyboard_stick]
+left_ramp_ms = 0         # 0 = instant full deflection
+right_ramp_ms = 100
+release_ms = 40         # right stick (camera keys) eases back to centre
+left_release_ms = 0     # left stick snaps back at once: movement stays responsive
+
+[touchpad]
+swipe_ms = 150
+swipe_length = 0.6
+tap_ms = 60
+
+[bindings]
+CROSS      = ["SPACE"]
+CIRCLE     = ["E"]
+SQUARE     = ["Q"]
+TRIANGLE   = ["F"]
+L1         = ["1", "SCROLL_UP"]
+R1         = ["2", "SCROLL_DOWN"]
+L2         = ["MOUSE_RIGHT"]
+R2         = ["MOUSE_LEFT"]
+L3         = ["LEFT_SHIFT"]
+R3         = ["C", "MOUSE_MIDDLE"]
+CREATE     = ["B"]
+OPTIONS    = ["RETURN"]
+PS         = ["GRAVE"]
+TOUCHPAD   = ["M"]
+MUTE       = ["T"]
+DPAD_UP    = ["LEFT_OPTION+UP_ARROW"]
+DPAD_DOWN  = ["LEFT_OPTION+DOWN_ARROW"]
+DPAD_LEFT  = ["LEFT_OPTION+LEFT_ARROW"]
+DPAD_RIGHT = ["LEFT_OPTION+RIGHT_ARROW"]
+
+# Touchpad: click is TOUCHPAD above; these play a finger stroke on each key press.
+TOUCHPAD_TAP         = ["KEY_7"]
+TOUCHPAD_SWIPE_LEFT  = ["KEY_3"]
+TOUCHPAD_SWIPE_RIGHT = ["KEY_4"]
+TOUCHPAD_SWIPE_UP    = ["KEY_5"]
+TOUCHPAD_SWIPE_DOWN  = ["KEY_6"]
+LEFT_STICK_UP     = ["W"]
+LEFT_STICK_DOWN   = ["S"]
+LEFT_STICK_LEFT   = ["A"]
+LEFT_STICK_RIGHT  = ["D"]
+RIGHT_STICK_UP    = ["I", "UP_ARROW"]
+RIGHT_STICK_DOWN  = ["K", "DOWN_ARROW"]
+RIGHT_STICK_LEFT  = ["J", "LEFT_ARROW"]
+RIGHT_STICK_RIGHT = ["L", "RIGHT_ARROW"]
+
+# Secondary keys: every control takes a list. Arrow keys drive the camera (right stick)
+# just like the mouse; hold LEFT_OPTION + arrows for the D-pad instead.
+
+# Combos: one chord presses several PS5 controls. Example (disabled):
+# [[combos]]
+# input  = "LEFT_COMMAND+E"
+# output = ["L1", "CIRCLE"]
+
+# Profiles layer per-control overrides over [bindings] above (the "default" profile).
+# F11 cycles default -> racing -> default. Add your own as [profiles.<name>.bindings].
+[profiles.racing]
+description = "Racing: arrows drive and steer, W/A/S/D move the camera"
+
+[profiles.racing.bindings]
+R2 = ["UP_ARROW", "MOUSE_LEFT"]       # accelerate
+L2 = ["DOWN_ARROW", "MOUSE_RIGHT"]    # brake / reverse
+LEFT_STICK_LEFT  = ["LEFT_ARROW"]     # steer left
+LEFT_STICK_RIGHT = ["RIGHT_ARROW"]    # steer right
+LEFT_STICK_UP    = []
+LEFT_STICK_DOWN  = []
+RIGHT_STICK_UP    = ["W"]             # camera
+RIGHT_STICK_DOWN  = ["S"]
+RIGHT_STICK_LEFT  = ["A"]
+RIGHT_STICK_RIGHT = ["D"]

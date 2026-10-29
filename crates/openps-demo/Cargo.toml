@@ -1,0 +1,22 @@
+[package]
+name = "openps-demo"
+version.workspace = true
+edition.workspace = true
+description = "Demo backend: a pretend PlayStation that streams a built-in H.264/HEVC clip through the real session stack"
+publish = false
+
+[dependencies]
+openps-core = { path = "../openps-core" }
+openps-crypto = { path = "../openps-crypto" }
+openps-discovery = { path = "../openps-discovery" }
+openps-rp = { path = "../openps-rp" }
+openps-session = { path = "../openps-session" }
+openps-takion = { path = "../openps-takion" }
+openps-testkit = { path = "../openps-testkit" }
+openps-video = { path = "../openps-video" }
+
+[dev-dependencies]
+openps-audio = { path = "../openps-audio" }
+tempfile = "3"
+openps-psn = { path = "../openps-psn" }
+openps-stream = { path = "../openps-stream" }

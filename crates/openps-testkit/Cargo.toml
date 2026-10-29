@@ -1,0 +1,12 @@
+[package]
+name = "openps-testkit"
+version.workspace = true
+edition.workspace = true
+description = "Mock PlayStation console used by tests: handshake responder and an encrypting stream source/verifier"
+publish = false
+
+[dependencies]
+openps-crypto = { path = "../openps-crypto" }
+openps-fec = { path = "../openps-fec" }
+openps-takion = { path = "../openps-takion" }
+base64 = "0.22"

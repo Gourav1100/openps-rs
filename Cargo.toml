@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/openps-fec", "crates/openps-crypto", "crates/openps-packets", "crates/openps-input", "crates/openps-pad", "crates/openps-takion", "crates/openps-stream", "crates/openps-testkit", "crates/openps-session", "crates/openps-rp", "crates/openps-discovery", "crates/openps-psn", "crates/openps-core", "crates/openps-video", "crates/openps-demo", "crates/openps-audio", "src-tauri"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"

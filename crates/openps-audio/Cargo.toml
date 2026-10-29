@@ -1,0 +1,14 @@
+[package]
+name = "openps-audio"
+version.workspace = true
+edition.workspace = true
+description = "Audio: Opus decoding (AudioToolbox) and low-latency playback (AudioQueue) with a jitter buffer"
+build = "build.rs"
+
+[dependencies]
+openps-core = { path = "../openps-core" }
+openps-stream = { path = "../openps-stream" }
+openps-takion = { path = "../openps-takion" }
+
+[dev-dependencies]
+openps-testkit = { path = "../openps-testkit" }

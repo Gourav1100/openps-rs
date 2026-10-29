@@ -1,0 +1,8 @@
+[package]
+name = "openps-discovery"
+version.workspace = true
+edition.workspace = true
+description = "Console discovery, wake-on-LAN style wake-up and registration probes (spec 02 sections 3 and 4.1)"
+
+[dependencies]
+socket2 = "0.5"

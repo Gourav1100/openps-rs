@@ -1,0 +1,5 @@
+[package]
+name = "openps-fec"
+version.workspace = true
+edition.workspace = true
+description = "Jerasure-compatible Cauchy Reed-Solomon (GF(2^8)) erasure decoder for Takion video/audio FEC"

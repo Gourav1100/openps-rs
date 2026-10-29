@@ -1,0 +1,17 @@
+[package]
+name = "openps-rp"
+version.workspace = true
+edition.workspace = true
+description = "Remote Play local-network protocol: key tables and derivation, registration, session init/ctrl, control channel"
+
+[dependencies]
+openps-crypto = { path = "../openps-crypto" }
+openps-discovery = { path = "../openps-discovery" }
+base64 = "0.22"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "extract-tables"
+path = "src/bin/extract-tables.rs"

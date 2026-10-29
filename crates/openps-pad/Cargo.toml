@@ -1,0 +1,8 @@
+[package]
+name = "openps-pad"
+version.workspace = true
+edition.workspace = true
+description = "Pad state -> Takion FEEDBACK / FEEDBACK_HISTORY payloads (spec 02 section 9, spec 04 section 11.2)"
+
+[dependencies]
+openps-input = { path = "../openps-input" }

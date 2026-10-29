@@ -1,0 +1,16 @@
+[package]
+name = "openps-crypto"
+version.workspace = true
+edition.workspace = true
+description = "Takion key schedule, AES-CTR payload cipher, per-packet GMAC and RpCipher (AES-CFB + HMAC IV)"
+
+[dependencies]
+aes = "0.8"
+aes-gcm = "0.10"
+cfb-mode = "0.8"
+cipher = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+
+[dev-dependencies]
+hex = "0.4.3"

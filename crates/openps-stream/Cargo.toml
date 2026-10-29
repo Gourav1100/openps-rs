@@ -1,0 +1,16 @@
+[package]
+name = "openps-stream"
+version.workspace = true
+edition.workspace = true
+description = "Sans-IO Takion stream engine: video/audio/haptic receive, frame reassembly with FEC, acks, feedback, congestion and retries (spec 02 sections 7-9)"
+
+[dependencies]
+openps-crypto = { path = "../openps-crypto" }
+openps-packets = { path = "../openps-packets" }
+openps-fec = { path = "../openps-fec" }
+openps-takion = { path = "../openps-takion" }
+openps-pad = { path = "../openps-pad" }
+openps-input = { path = "../openps-input" }
+
+[dev-dependencies]
+openps-testkit = { path = "../openps-testkit" }

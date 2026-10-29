@@ -1,0 +1,5 @@
+[package]
+name = "openps-packets"
+version.workspace = true
+edition.workspace = true
+description = "Takion UDP packet layouts: video/audio receive, congestion/feedback send (spec 02 section 7.3)"
