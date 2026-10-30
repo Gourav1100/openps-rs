@@ -204,9 +204,6 @@ pub struct StreamOptions {
     /// Colour saturation in percent: 100 = as the stream is, above = more vivid, below = paler.
     #[serde(default = "default_saturation")]
     pub saturation: u8,
-    /// Draw the key mapped to each controller button prompt the picture shows (✕, ◯, L1, ...).
-    #[serde(default)]
-    pub show_prompts: bool,
     /// Which version of the settings this was saved by (see `migrated`).
     #[serde(default)]
     pub settings_version: u8,
@@ -337,7 +334,6 @@ impl Default for StreamOptions {
             framegen: default_framegen(),
             sharpness: default_sharpness(),
             saturation: default_saturation(),
-            show_prompts: false,
             settings_version: SETTINGS_VERSION,
         }
     }

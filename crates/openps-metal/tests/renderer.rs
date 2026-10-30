@@ -95,7 +95,6 @@ fn settings_can_change_while_streaming_in_every_combination() {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
             gen_factor: 0.0,
         },
         RenderSettings {
@@ -106,7 +105,6 @@ fn settings_can_change_while_streaming_in_every_combination() {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
             gen_factor: 0.0,
         },
         RenderSettings {
@@ -117,7 +115,6 @@ fn settings_can_change_while_streaming_in_every_combination() {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
             gen_factor: 0.0,
         },
         RenderSettings {
@@ -128,7 +125,6 @@ fn settings_can_change_while_streaming_in_every_combination() {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
             gen_factor: 0.0,
         },
     ];
@@ -195,7 +191,6 @@ fn dropping_the_renderer_mid_stream_is_prompt_and_safe() {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
             gen_factor: 0.0,
         });
         feed(&r, frames(20, OutputFormat::Bgra), 120.0);
@@ -356,18 +351,17 @@ fn the_rate_follows_the_distinct_pictures_not_the_streams_frame_ids() {
 }
 
 #[test]
-fn at_least_30_frames_a_second_are_accepted_whatever_the_game_renders() {
-    // a game that renders 12 pictures a second in a 60 fps stream: 48 of every 60 frames are repeats, but one frame in about every 33 ms is
-    // kept all the same
+fn repeated_pictures_are_displayed_as_a_fallback_without_changing_repeat_classification() {
+    // A game that renders 12 pictures a second in a 60 fps stream: distinct-picture rate remains 12 fps, while repeated pictures
+    // provide a fallback about every 100/3 ms.
     let frames = phased_stream(&[(300, 12.0)], 60.0);
     let r = renderer(RenderSettings { display_hz: 60, gen_factor: 1.0, mode: FrameMode::Smooth, ..Default::default() });
     feed(&r, frames, 60.0);
     std::thread::sleep(Duration::from_millis(300));
     let s = r.stats();
-    eprintln!("12 pictures a second: accepted {} fps, repeats {:.2}", s.content_fps, s.repeat_share);
-    // the floor is 30; a picture that comes just after a kept repeat is kept too, so the rate can sit a little above it
-    assert!((29.0..=38.0).contains(&s.content_fps), "accepted rate {}", s.content_fps);
-    assert!(s.real_frames >= 130, "{} frames accepted in 5 s", s.real_frames);
+    eprintln!("12 pictures a second: {} real pictures displayed, repeats {:.2}", s.real_frames, s.repeat_share);
+    assert!(s.repeat_share > 0.7, "{}", s.repeat_share);
+    assert!(s.real_frames >= 130, "{} pictures displayed in 5 s", s.real_frames);
     // and a game that renders 60 keeps all of them
     let r = renderer(RenderSettings { display_hz: 60, gen_factor: 1.0, mode: FrameMode::Smooth, ..Default::default() });
     feed(&r, phased_stream(&[(300, 60.0)], 60.0), 60.0);

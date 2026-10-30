@@ -1,7 +1,6 @@
 pub mod camera;
 pub mod gpu;
 pub mod look;
-pub mod prompts;
 #[cfg(target_os = "macos")]
 pub mod renderer;
 pub mod shaders;

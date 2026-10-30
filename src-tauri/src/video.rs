@@ -125,7 +125,6 @@ pub fn render_settings(o: &StreamOptions) -> RenderSettings {
         metalfx: o.framegen == "metalfx",
         sharpness: f32::from(o.sharpness.min(200)) / 100.0,
         saturation: f32::from(o.saturation.min(200)) / 100.0,
-        prompts: o.show_prompts,
     }
 }
 
@@ -207,28 +206,6 @@ impl Video {
         }
     }
 
-    /// Save the plane the last prompt scan read (`prompt-plane-WxH.gray`) next to the detections (`prompt-scan.txt`) in `dir`, at most
-    /// every ten seconds, so a wrong or missing keycap can be reproduced from the files.
-    pub fn dump_prompt_scan(&self, dir: &std::path::Path) {
-        use std::sync::Mutex;
-        static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-        let Backend::Metal(m) = &self.backend else { return };
-        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(10)) {
-            return;
-        }
-        let Some(plane) = m.prompt_plane() else { return };
-        *last = Some(std::time::Instant::now());
-        let (data, w, h) = (&plane.0, plane.1, plane.2);
-        let (hits, _, scans) = m.prompts();
-        let text: String = hits
-            .iter()
-            .map(|d| format!("{:?} x={:.4} y={:.4} w={:.4} h={:.4} score={:.2}\n", d.kind, d.x, d.y, d.w, d.h, d.score))
-            .collect();
-        let _ = std::fs::write(dir.join(format!("prompt-plane-{w}x{h}.gray")), data);
-        let _ = std::fs::write(dir.join("prompt-scan.txt"), format!("scan {scans}, plane {w}x{h}\n{text}"));
-    }
-
     /// Record every arriving frame for `secs` seconds and write `frame-diag.csv` (id, seconds, changed sample bytes, kept) to `dir`; returns
     /// a one-line summary: how many frames the console sent per second, how many were different pictures, and how many ids were skipped.
     pub fn frame_diagnostic(&self, dir: &std::path::Path, secs: f64) -> Result<String, String> {
@@ -275,83 +252,6 @@ impl Video {
             gaps,
             span
         ))
-    }
-
-    /// Push the prompts to the page the moment they change (instead of the page asking): a thread watches the renderer's change counter
-    /// and sends `{type: "prompts", ...}` on the app's event channel, with the video view's rectangle (it changes when the window does).
-    pub fn watch_prompts(self: &Arc<Self>, app: AppHandle) {
-        use tauri::{Emitter, Manager};
-        let me = self.clone();
-        let _ = std::thread::Builder::new().name("openps-prompt-events".into()).spawn(move || {
-            let Backend::Metal(m) = &me.backend else { return };
-            let (mut last, mut view, mut asked) = (u64::MAX, None::<[f64; 4]>, std::time::Instant::now());
-            let mut had_hits = false;
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(16));
-                let v = m.prompt_version();
-                let mut view_changed = false;
-                // the window's rectangle is only worth asking for while something is drawn (or has just changed)
-                if v != last || (had_hits && asked.elapsed() > std::time::Duration::from_millis(300)) {
-                    if let Some(w) = app.get_webview_window("main") {
-                        if let Some(r) = me.view_rect(&w) {
-                            view_changed = view != Some(r);
-                            view = Some(r);
-                        }
-                    }
-                    asked = std::time::Instant::now();
-                }
-                if v != last || view_changed {
-                    last = v;
-                    let mut out = me.prompt_hits();
-                    had_hits = out["hits"].as_array().is_some_and(|h| !h.is_empty());
-                    out["type"] = "prompts".into();
-                    if let Some(r) = view {
-                        out["view"] = serde_json::json!(r);
-                    }
-                    let _ = app.emit(crate::EVENT, out);
-                }
-            }
-        });
-    }
-
-    /// How the video view sits against the web view, in points: `[left offset, bottom offset, width, height]` (the view's left and
-    /// bottom edges relative to the web view's, then its size). The video fills the window's whole content area, but the page's own
-    /// coordinates start below the title bar, so the page cannot assume the two share a top-left corner when it draws over the picture;
-    /// it works the top out from the bottom edge and its own viewport height.
-    pub fn view_rect(&self, window: &tauri::WebviewWindow) -> Option<[f64; 4]> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let view = self.view;
-        window
-            .with_webview(move |wv| {
-                // SAFETY: runs on the main thread; both views are alive (the video view is owned by the content view).
-                let view = view; // capture the whole (Send) wrapper, not just its pointer field
-                let r = unsafe {
-                    let web = wv.inner() as *mut AnyObject;
-                    let vf: Rect = msg_send![view.0, frame];
-                    let wf: Rect = msg_send![web, frame];
-                    [vf.origin.x - wf.origin.x, wf.origin.y - vf.origin.y, vf.size.w, vf.size.h]
-                };
-                let _ = tx.send(r);
-            })
-            .ok()?;
-        rx.recv_timeout(std::time::Duration::from_millis(500)).ok()
-    }
-
-    /// Controller button prompts found in the picture: `{aspect, scans, hits:[{kind,x,y,w,h}]}` (positions are 0..1 of the picture).
-    pub fn prompt_hits(&self) -> serde_json::Value {
-        match &self.backend {
-            Backend::Metal(m) => {
-                let (hits, aspect, scans) = m.prompts();
-                // L3 and R3 are recognised (so they are not taken for something else) but get no keycap
-                let hits: Vec<_> = hits
-                    .iter()
-                    .filter(|d| !d.kind.is_silent())
-                    .map(|d| serde_json::json!({ "id": d.id, "kind": d.kind.control(), "x": d.x, "y": d.y, "w": d.w, "h": d.h }))
-                    .collect();
-                serde_json::json!({ "aspect": aspect, "scans": scans, "hits": hits })
-            }
-            Backend::System(_) => serde_json::json!({ "aspect": 1.78, "scans": 0, "hits": [] }),
-        }
     }
 
     /// Renderer statistics as JSON (for the HUD and diagnostics).

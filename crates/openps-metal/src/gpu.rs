@@ -145,8 +145,6 @@ pub struct Gpu {
     mv1: Option<Tex>,
     bg: Option<Tex>,
     luma_cur: Option<Tex>,
-    /// CPU-readable copy of the luma plane for the prompt detector.
-    prompt_tex: Option<Tex>,
     luma_prev: Option<Tex>,
     mv: Option<Tex>,
     /// CPU-readable copies of `mv`, one per ingest (ring): a later in-flight command buffer cannot tear a read.
@@ -241,7 +239,6 @@ impl Gpu {
             mv1: None,
             bg: None,
             luma_cur: None,
-            prompt_tex: None,
             luma_prev: None,
             mv: None,
             mv_snaps: Vec::new(),
@@ -286,7 +283,6 @@ impl Gpu {
         let changed = self.cur.as_ref().is_none_or(|c| (c.width(), c.height()) != (w, h));
         if changed {
             self.luma_cur = None;
-            self.prompt_tex = None;
             self.luma_prev = None;
             self.mv = None;
             self.mv_snaps.clear();
@@ -427,37 +423,6 @@ impl Gpu {
             }
         }
         Ok(())
-    }
-
-    /// Copy the newest frame's half-size luma plane into a CPU-readable texture (encoded into `cmd`, after this frame's `ingest`).
-    /// Read it with [`Gpu::read_luma`] once `cmd` has completed. `None` before the first frame.
-    pub fn luma_snapshot(&mut self, cmd: &Cmd) -> Option<Tex> {
-        let src = self.luma_cur.clone()?;
-        let (w, h) = (src.width(), src.height());
-        if self.prompt_tex.as_ref().is_none_or(|t| (t.width(), t.height()) != (w, h)) {
-            self.prompt_tex =
-                make_tex(&self.dev, MTLPixelFormat::R8Unorm, w, h, MTLTextureUsage::ShaderRead, true).ok();
-        }
-        let dst = self.prompt_tex.clone()?;
-        let blit = cmd.blitCommandEncoder()?;
-        unsafe { blit.copyFromTexture_toTexture(&src, &dst) };
-        blit.endEncoding();
-        Some(dst)
-    }
-
-    /// The bytes of a luma snapshot (valid once the command buffer that filled it has completed).
-    pub fn read_luma(tex: &Tex) -> Vec<u8> {
-        let (w, h) = (tex.width(), tex.height());
-        let mut out = vec![0u8; w * h];
-        unsafe {
-            tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                NonNull::new(out.as_mut_ptr().cast()).expect("vec pointer"),
-                w,
-                MTLRegion { origin: MTLOrigin { x: 0, y: 0, z: 0 }, size: MTLSize { width: w, height: h, depth: 1 } },
-                0,
-            );
-        }
-        out
     }
 
     /// Dominant image motion between the last two real frames, in full-resolution pixels per source frame, and the share of the

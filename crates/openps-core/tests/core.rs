@@ -572,7 +572,6 @@ fn settings_are_validated_persisted_and_survive_restart() {
         framegen: "builtin".into(),
         sharpness: 50,
         saturation: 100,
-        show_prompts: false,
         settings_version: 2,
     };
     r.core.set_settings(o.clone()).unwrap();
@@ -589,6 +588,17 @@ fn settings_are_validated_persisted_and_survive_restart() {
     // restart over the same files
     let again = build(&r.dir, r.fake.clone(), r.events.clone(), r.secrets.clone(), r.media.clone(), None);
     assert_eq!(again.settings(), Some(o));
+}
+
+#[test]
+fn retired_mapped_prompt_setting_is_ignored_and_not_persisted() {
+    let mut legacy = serde_json::to_value(StreamOptions::default()).unwrap();
+    legacy["show_prompts"] = serde_json::Value::Bool(true);
+
+    let options: StreamOptions = serde_json::from_value(legacy).unwrap();
+    let saved = serde_json::to_value(options).unwrap();
+
+    assert!(saved.get("show_prompts").is_none());
 }
 
 #[test]

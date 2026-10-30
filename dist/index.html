@@ -26,7 +26,6 @@
     <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3" /> <path d="M21 8V5a2 2 0 0 0-2-2h-3" /> <path d="M3 16v3a2 2 0 0 0 2 2h3" /> <path d="M16 21h3a2 2 0 0 0 2-2v-3" /></symbol>
     <symbol id="i-volume" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" /> <path d="M16 9a5 5 0 0 1 0 6" /> <path d="M19.364 18.364a9 9 0 0 0 0-12.728" /></symbol>
     <symbol id="i-mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z" /> <path d="m16.5 14.5 5-5" /> <path d="m16.5 9.5 5 5" /></symbol>
-    <symbol id="i-keycap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="3" /> <path d="M8 12h.01" /> <path d="M12 12h.01" /> <path d="M16 12h.01" /> <path d="M9 16h6" /></symbol>
     <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5" /> <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></symbol>
     <symbol id="i-sparkles" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" /> <path d="M20 3v4" /> <path d="M22 5h-4" /> <path d="M4 17v2" /> <path d="M5 18H3" /></symbol>
     <symbol id="i-scaling" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /> <path d="M14 15H9v-5" /> <path d="M16 3h5v5" /> <path d="M21 3 9 15" /></symbol>
@@ -187,10 +186,6 @@
         <fieldset class="field" id="framegen-field" hidden><legend>Interpolation engine <span class="chip chip-warn">Experimental</span></legend><div class="seg" role="radiogroup" aria-label="Who makes the interpolated frames" data-setting="framegen"></div>
           <p class="hint" id="framegen-hint"></p></fieldset>
         <div class="field toggle-row">
-          <div><label id="prompts-label" for="prompts-switch">Show mapped keys on button prompts</label><p class="hint" id="prompts-hint">Finds the controller buttons the game shows (✕ ◯ □ △, L1 R1 L2 R2, L3 R3 and the stick icons) and draws the key you mapped to each one over it. It reads the picture, so a button drawn in an unusual style can be missed. You can also switch it on and off from the bar on the stream screen.</p></div>
-          <button id="prompts-switch" class="switch" aria-describedby="prompts-hint" type="button" role="switch" aria-checked="false" aria-labelledby="prompts-label"><span class="knob"></span></button>
-        </div>
-        <div class="field toggle-row">
           <div><label id="cam-label" for="cam-switch">Camera latency compensation</label><p class="hint" id="cam-hint">Turns the picture right away when you move the mouse, before the console has answered. It learns how your game responds and switches itself off when it cannot tell.</p></div>
           <button id="cam-switch" class="switch" aria-describedby="cam-hint" type="button" role="switch" aria-checked="false" aria-labelledby="cam-label"><span class="knob"></span></button>
         </div>
@@ -291,7 +286,6 @@
     <button id="cancel-connect" class="btn btn-ghost" type="button">Cancel</button>
   </div>
   <div id="diag-timer" class="diag-timer" role="status" aria-live="polite" hidden><i aria-hidden="true"></i><span id="diag-timer-text"></span></div>
-  <div id="prompt-layer" class="prompt-layer" aria-hidden="true"></div>
   <div id="hud" class="hud" hidden>
     <div class="hud-bar hud-top">
       <div class="hud-title"><span class="live-dot" aria-hidden="true"></span><strong id="hud-name"></strong></div>
@@ -304,7 +298,6 @@
       <div class="hud-group hud-left">
         <button id="games-btn" class="tool" type="button" title="Start another game on the console"><svg aria-hidden="true"><use href="#i-play"/></svg><span class="cap">Games</span></button>
         <button id="edit-keys-btn" class="tool" type="button" title="Edit key bindings (F8)"><svg aria-hidden="true"><use href="#i-gear"/></svg><span class="cap">Edit keys</span></button>
-        <button id="prompts-btn" class="tool" type="button" aria-pressed="false" title="Show the mapped key over each button the game shows"><svg aria-hidden="true"><use href="#i-keycap"/></svg><span class="cap" id="prompts-text">Key hints</span></button>
         <button id="map-btn" class="tool" type="button" aria-pressed="true" title="Keyboard and mouse control (F10)"><svg aria-hidden="true"><use href="#i-gamepad"/></svg><span class="cap" id="map-text">Controls</span></button>
       </div>
       <button id="ps-btn" class="ps-btn" type="button" aria-label="PS button" title="PS button (hold to keep it pressed)"><svg aria-hidden="true"><use href="#g-pslogo"/></svg></button>

@@ -1,3 +1,0 @@
-The controller-glyph templates in prompt_glyphs.bin (and the test art in tests/data/glyph_scenes.bin) are derived from
-"Input Prompts" by Kenney (https://kenney.nl/assets/input-prompts), version 1.5, released under Creative Commons CC0 1.0 (public domain).
-No attribution is required; it is given here anyway. They are rebuilt by scripts/make_prompt_glyphs.py.

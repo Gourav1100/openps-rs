@@ -120,7 +120,6 @@ fn a_settings_storm_while_streaming_neither_deadlocks_nor_errors() {
                 metalfx: n.is_multiple_of(4),
                 sharpness: (n % 200) as f32 / 100.0,
                 saturation: (n % 250) as f32 / 100.0,
-                prompts: false,
                 gen_factor: 0.0,
             });
             n += 1;

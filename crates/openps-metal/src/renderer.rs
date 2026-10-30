@@ -1,8 +1,8 @@
 //! The renderer thread: owns the GPU and a `CAMetalLayer`, takes decoded frames from a mailbox and presents at the display's
 //! pace. Everything that decides latency is here:
 //!
-//! * **The decoder never waits for the GPU.** `submit` queues the frame in a two-frame mailbox and pushes the oldest out when it is full; only the newest
-//!   frame is ever rendered.
+//! * **The decoder never waits for the GPU.** `submit` queues new pictures in a bounded mailbox and keeps at most one repeated picture as a
+//!   fallback for the display thread.
 //! * **Real frames are shown immediately.** In the default mode nothing is held back: the newest frame is advanced by how
 //!   late it already is (extrapolation), never delayed.
 //! * **At most two frames in flight** on the GPU, and the loop is paced by the display (`nextDrawable`).
@@ -10,7 +10,6 @@
 use crate::camera::CameraComp;
 use crate::gpu::{upscale_target, Cmd, Gpu, Tex};
 use crate::look::SharedLook;
-use crate::prompts::{self, Detection, Tracker};
 use crate::timeline::Timeline;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -41,11 +40,10 @@ extern "C" {
 /// The rate the console is always asked to stream at.
 pub const STREAM_HZ: f64 = 60.0;
 
-/// The shortest wait between two accepted frames: a repeated picture is normally dropped, but one that comes this long after the last
-/// accepted frame is kept, so at least 30 frames a second are always accepted. 100/3 ms is a 30 Hz rhythm; the stream delivers every 16.7 ms,
-/// so a hard limit of 33.3 ms would now and then miss by a hair and wait for the next frame (50 ms, 20 fps): the limit sits halfway between
-/// one and two stream frames.
-const MIN_ACCEPT_GAP: Duration = Duration::from_millis(25);
+/// One 30 Hz interval: a pending repeated picture is shown if no distinct picture arrives by this deadline.
+const DUPLICATE_DISPLAY_THRESHOLD: Duration = Duration::from_nanos(100_000_000 / 3);
+/// The display thread checks pending repeated pictures once per 60 Hz stream interval.
+const DISPLAY_TIMER_INTERVAL: Duration = Duration::from_nanos(50_000_000 / 3);
 
 pub fn requested_rate(s: &RenderSettings, source_hz: f64) -> u16 {
     if s.gen_factor > 0.0 {
@@ -121,8 +119,6 @@ pub struct RenderSettings {
     pub sharpness: f32,
     /// Colour saturation, 1.0 = as the stream is.
     pub saturation: f32,
-    /// Look for controller button prompts in the picture (see `prompts`).
-    pub prompts: bool,
 }
 impl Default for RenderSettings {
     fn default() -> Self {
@@ -135,7 +131,6 @@ impl Default for RenderSettings {
             metalfx: false,
             sharpness: 1.0,
             saturation: 1.0,
-            prompts: false,
         }
     }
 }
@@ -201,9 +196,56 @@ struct Pending {
     arrived: f64,
 }
 
+struct DuplicateDisplay<T> {
+    last_timestamp: Instant,
+    duplicate_frame: Option<T>,
+    duplicate_display: bool,
+}
+
+impl<T> DuplicateDisplay<T> {
+    fn new(now: Instant) -> Self {
+        Self { last_timestamp: now, duplicate_frame: None, duplicate_display: false }
+    }
+
+    fn reset(&mut self, now: Instant) {
+        self.last_timestamp = now;
+        self.duplicate_frame = None;
+        self.duplicate_display = false;
+    }
+
+    fn on_frame(&mut self, frame: T, duplicate: bool, now: Instant) -> Option<T> {
+        if duplicate {
+            self.duplicate_frame = Some(frame);
+            return None;
+        }
+
+        self.duplicate_frame = None;
+        if self.duplicate_display {
+            self.duplicate_display = false;
+        } else {
+            self.last_timestamp = now;
+        }
+        Some(frame)
+    }
+
+    fn timer_tick(&mut self, now: Instant) -> Option<T> {
+        if now.saturating_duration_since(self.last_timestamp) < DUPLICATE_DISPLAY_THRESHOLD {
+            return None;
+        }
+        let frame = self.duplicate_frame.take()?;
+        self.last_timestamp = now;
+        self.duplicate_display = true;
+        Some(frame)
+    }
+
+    fn duplicate_is_due(&self, now: Instant) -> bool {
+        self.duplicate_frame.is_some()
+            && now.saturating_duration_since(self.last_timestamp) >= DUPLICATE_DISPLAY_THRESHOLD
+    }
+}
+
 struct Shared {
-    /// Decoded frames waiting for the renderer, oldest first: two at most. A frame that arrives while two are waiting pushes the oldest out
-    /// (counted in `mailbox_drops`); a renderer that is a little late loses nothing.
+    /// Decoded frames waiting for the renderer, oldest first, up to `MAILBOX_FRAMES`; overflow drops the oldest (counted in `mailbox_drops`).
     mailbox: Mutex<std::collections::VecDeque<Pending>>,
     wake: Condvar,
     settings: Mutex<RenderSettings>,
@@ -213,24 +255,12 @@ struct Shared {
     reset: AtomicBool,
     /// The drawable size was set explicitly (no view): do not override it from the layer's bounds.
     headless: Arc<AtomicBool>,
-    /// Controller button prompts found in the picture, with the size of the plane they were found in.
-    prompts: Mutex<PromptState>,
     diag: Mutex<Diag>,
     /// Finds repeated pictures as frames arrive (the decoder's thread), and how many frames arrived / were new pictures in this window.
     gate: Mutex<DupGate>,
+    /// Serializes new-frame arrivals with the display thread's periodic duplicate fallback.
+    display: Mutex<DuplicateDisplay<Pending>>,
     counts: Mutex<Counts>,
-}
-
-#[derive(Clone, Default)]
-struct PromptState {
-    found: Vec<Detection>,
-    /// Bumped whenever what is shown changes (the app pushes an event to the page on a change).
-    version: u64,
-    plane: (usize, usize),
-    /// Scans completed so far.
-    scans: u64,
-    /// The plane the last scan read (for diagnostics).
-    last_plane: Option<Arc<(Vec<u8>, usize, usize)>>,
 }
 
 pub struct MetalRenderer {
@@ -243,6 +273,18 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn enqueue_pending(shared: &Shared, mailbox: &mut VecDeque<Pending>, pending: Pending) {
+    mailbox.push_back(pending);
+    if mailbox.len() > MAILBOX_FRAMES {
+        mailbox.pop_front();
+        lock(&shared.stats).mailbox_drops += 1;
+    }
+}
+
+fn next_display_frame<T>(mailbox: &mut VecDeque<T>, display: &mut DuplicateDisplay<T>, now: Instant) -> Option<T> {
+    mailbox.pop_front().or_else(|| display.timer_tick(now))
+}
+
 impl MetalRenderer {
     pub fn new(look: SharedLook, settings: RenderSettings) -> Result<Self, String> {
         let shared = Arc::new(Shared {
@@ -253,9 +295,9 @@ impl MetalRenderer {
             stop: AtomicBool::new(false),
             reset: AtomicBool::new(false),
             headless: Arc::new(AtomicBool::new(false)),
-            prompts: Mutex::new(PromptState::default()),
             diag: Mutex::new(Diag::default()),
             gate: Mutex::new(DupGate { prev: vec![], rule: RepeatRule::default() }),
+            display: Mutex::new(DuplicateDisplay::new(Instant::now())),
             counts: Mutex::new(Counts::default()),
         });
         let (tx, rx) = channel::<Result<usize, String>>();
@@ -291,22 +333,16 @@ impl MetalRenderer {
     /// Hand over a decoded frame. Never blocks; replaces an older frame that has not been drawn yet.
     pub fn submit(&self, frame: Frame) {
         let arrived = now();
-        // A repeated picture adds nothing: it is counted, recorded for the diagnostic, and not queued (so it can never push a real picture
-        // out of the queue or use up a turn of the render loop).
-        let (repeat, changed) = lock(&self.shared.gate).check(&frame);
-        // A repeat is kept all the same when it comes at least `MIN_ACCEPT_GAP` after the last frame that was accepted: at least 30 frames
-        // a second always get through, and the picture keeps moving at an even pace even when the game stalls.
         let t = Instant::now();
-        let mut keep = !repeat;
+        let mut gate = lock(&self.shared.gate);
+        let (repeat, changed) = gate.check(&frame);
         {
             let mut c = lock(&self.shared.counts);
-            keep = keep || c.last_accepted.is_none_or(|a| t.duration_since(a) >= MIN_ACCEPT_GAP);
             c.first.get_or_insert(t);
             c.last = Some(t);
             c.seen += 1;
-            c.new += u32::from(keep);
-            if keep {
-                c.last_accepted = Some(t);
+            c.new += u32::from(!repeat);
+            if !repeat {
                 c.new_times.push_back(t);
                 while c.new_times.len() > 64 || c.new_times.front().is_some_and(|x| t.duration_since(*x) > QUICK_WINDOW)
                 {
@@ -317,22 +353,22 @@ impl MetalRenderer {
         {
             let mut d = lock(&self.shared.diag);
             if let (Some(until), Some(t0)) = (d.until, d.started) {
-                d.rows.push((frame.source_id(), t0.elapsed().as_secs_f64(), changed, !repeat, keep));
+                d.rows.push((frame.source_id(), t0.elapsed().as_secs_f64(), changed, !repeat, !repeat));
                 if Instant::now() >= until || d.rows.len() >= 20_000 {
                     (d.until, d.done) = (None, true);
                 }
             }
         }
-        if !keep {
-            return;
+
+        let mut mailbox = lock(&self.shared.mailbox);
+        let mut display = lock(&self.shared.display);
+        let pending = Pending { frame, arrived };
+        if let Some(pending) = display.on_frame(pending, repeat, t) {
+            enqueue_pending(&self.shared, &mut mailbox, pending);
         }
-        let mut m = lock(&self.shared.mailbox);
-        m.push_back(Pending { frame, arrived });
-        if m.len() > MAILBOX_FRAMES {
-            m.pop_front();
-            lock(&self.shared.stats).mailbox_drops += 1;
-        }
-        drop(m);
+        drop(display);
+        drop(mailbox);
+        drop(gate);
         self.shared.wake.notify_one();
     }
 
@@ -348,9 +384,12 @@ impl MetalRenderer {
     /// New session: forget the old stream's timing, motion and camera model.
     pub fn reset(&self) {
         self.shared.reset.store(true, Ordering::Relaxed);
+        let mut gate = lock(&self.shared.gate);
+        *gate = DupGate { prev: vec![], rule: RepeatRule::default() };
         lock(&self.shared.mailbox).clear();
-        *lock(&self.shared.gate) = DupGate { prev: vec![], rule: RepeatRule::default() };
+        lock(&self.shared.display).reset(Instant::now());
         *lock(&self.shared.counts) = Counts::default();
+        drop(gate);
         self.shared.wake.notify_one();
     }
 
@@ -376,23 +415,6 @@ impl MetalRenderer {
             return Some(std::mem::take(&mut d.rows));
         }
         None
-    }
-
-    /// A number that changes whenever the set of shown prompts (or where they are) changes.
-    pub fn prompt_version(&self) -> u64 {
-        lock(&self.shared.prompts).version
-    }
-
-    /// The luma plane the last prompt scan read, with its size (for diagnostics).
-    pub fn prompt_plane(&self) -> Option<Arc<(Vec<u8>, usize, usize)>> {
-        lock(&self.shared.prompts).last_plane.clone()
-    }
-
-    /// The controller button prompts currently found in the picture (positions are 0..1 of the picture), the picture's aspect ratio
-    /// (width / height), and how many scans have run. Empty while `RenderSettings::prompts` is off.
-    pub fn prompts(&self) -> (Vec<Detection>, f32, u64) {
-        let p = lock(&self.shared.prompts);
-        (p.found.clone(), if p.plane.1 > 0 { p.plane.0 as f32 / p.plane.1 as f32 } else { 16.0 / 9.0 }, p.scans)
     }
 }
 
@@ -693,8 +715,6 @@ struct Counts {
     new: u32,
     first: Option<Instant>,
     last: Option<Instant>,
-    /// When the last accepted frame arrived.
-    last_accepted: Option<Instant>,
     /// When the last accepted frames arrived (about the last half second), for a quick read of the rate.
     new_times: std::collections::VecDeque<Instant>,
 }
@@ -754,69 +774,6 @@ impl Pacing {
     }
 }
 
-enum PromptJob {
-    Scan { luma: Vec<u8>, w: usize, h: usize },
-    Clear,
-}
-
-/// Wider planes are shrunk to about this width before scanning. A shoulder-button pill is only about 16 px wide at this size
-/// (its label cannot be read at 640), and the scan's cost follows the pixel count.
-const PROMPT_PLANE_WIDTH: usize = 960;
-
-/// Full scans take about 25 ms of CPU: they run at most this often, and never more than a quarter of the thread's time.
-const SCAN_EVERY_MIN: Duration = Duration::from_millis(120);
-
-fn prompt_thread(shared: Arc<Shared>, rx: std::sync::mpsc::Receiver<PromptJob>) {
-    let tpl = prompts::Templates::new();
-    let mut tracker = Tracker::new();
-    let mut stability = prompts::Stability::new();
-    let mut last_scan: Option<Instant> = None;
-    let mut scan_interval = SCAN_EVERY_MIN;
-    while let Ok(job) = rx.recv() {
-        match job {
-            PromptJob::Clear => {
-                tracker.clear();
-                stability.reset();
-                last_scan = None;
-                let mut p = lock(&shared.prompts);
-                if !p.found.is_empty() {
-                    p.found.clear();
-                    p.version += 1;
-                }
-            }
-            PromptJob::Scan { luma, w, h } => {
-                let (data, pw, ph) = prompts::shrink(&luma, w, h, PROMPT_PLANE_WIDTH);
-                let plane = prompts::Plane { data: &data, w: pw, h: ph };
-                stability.update(&plane);
-                let mut changed = false;
-                // the slow part: look for glyphs anywhere in the picture
-                let due = last_scan.is_none_or(|t| t.elapsed() >= scan_interval);
-                let mut dumped = None;
-                if due {
-                    let t0 = Instant::now();
-                    let hits = prompts::detect_with_history(&plane, &tpl, &stability);
-                    changed |= tracker.discovery(&hits, pw, ph);
-                    scan_interval = SCAN_EVERY_MIN.max(t0.elapsed() * 4);
-                    last_scan = Some(Instant::now());
-                    dumped = Some(Arc::new((data.clone(), pw, ph)));
-                }
-                // the quick part, on every frame that arrives: is each glyph that is being followed still there?
-                changed |= tracker.verify(&plane, &tpl);
-                let mut p = lock(&shared.prompts);
-                p.plane = (w, h);
-                if due {
-                    p.scans += 1;
-                    p.last_plane = dumped;
-                }
-                if changed {
-                    p.found = tracker.detections();
-                    p.version += 1;
-                }
-            }
-        }
-    }
-}
-
 extern "C" {
     fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
 }
@@ -852,17 +809,6 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
     // unconfigured state and show nothing). Flush the implicit transaction ourselves.
     objc2_quartz_core::CATransaction::flush();
     let _ = init.send(Ok(Retained::into_raw(layer.clone()) as usize));
-
-    // The prompt detector runs on its own thread (a scan takes about 10 ms of CPU): the renderer hands it a luma plane a few times a
-    // second and never waits for it.
-    let (ptx, prx) = std::sync::mpsc::sync_channel::<PromptJob>(1);
-    {
-        let sh = shared.clone();
-        let _ = std::thread::Builder::new().name("openps-prompts".into()).spawn(move || prompt_thread(sh, prx));
-    }
-    let mut prompt_wait: Option<(Cmd, Tex)> = None;
-    let mut prompt_last = Instant::now();
-    let mut prompts_were_on = false;
 
     let mut tl = Timeline::default();
     let mut cam = CameraComp::new(look);
@@ -903,8 +849,6 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 cur_id = None;
                 prev_id = None;
                 awaiting = None;
-                prompt_wait = None;
-                let _ = ptx.try_send(PromptJob::Clear);
                 gpu.reset_stream();
                 src_locked = 0.0;
             }
@@ -983,15 +927,20 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
             // Event-driven when there is nothing to generate: wait for a frame instead of redrawing the same one.
             if !ticking {
                 let mut m = lock(&shared.mailbox);
+                let timeout = if lock(&shared.display).duplicate_frame.is_some() {
+                    DISPLAY_TIMER_INTERVAL
+                } else {
+                    Duration::from_millis(100)
+                };
                 if m.is_empty() {
-                    m = shared
-                        .wake
-                        .wait_timeout(m, Duration::from_millis(100))
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0;
+                    m = shared.wake.wait_timeout(m, timeout).unwrap_or_else(PoisonError::into_inner).0;
                 }
-                if m.is_empty() {
-                    drop(m);
+                drop(m);
+                let mailbox = lock(&shared.mailbox);
+                let display = lock(&shared.display);
+                let has_frame = !mailbox.is_empty();
+                let duplicate_due = display.duplicate_is_due(Instant::now());
+                if !has_frame && !duplicate_due {
                     return;
                 }
             } else if lock(&shared.mailbox).is_empty() && cur_id.is_none() {
@@ -1044,25 +993,6 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                     _ => awaiting = Some((c, t0, t1, slot)),
                 }
             }
-
-            // prompt detector: take the luma snapshot once the GPU has filled it, and switch it off cleanly
-            if let Some((c, tex)) = prompt_wait.take() {
-                match c.status() {
-                    MTLCommandBufferStatus::Completed => {
-                        let _ = ptx.try_send(PromptJob::Scan {
-                            luma: Gpu::read_luma(&tex),
-                            w: tex.width(),
-                            h: tex.height(),
-                        });
-                    }
-                    MTLCommandBufferStatus::Error => {}
-                    _ => prompt_wait = Some((c, tex)),
-                }
-            }
-            if prompts_were_on && !settings.prompts {
-                let _ = ptx.try_send(PromptJob::Clear);
-            }
-            prompts_were_on = settings.prompts;
 
             // Keep the drawable matched to the layer's pixel size (bounds x scale). Core Animation does not do this for a layer
             // that was created off the main thread, and a drawable that is too small is stretched, which is blurry.
@@ -1128,7 +1058,11 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 None => now(),
             };
             let mut got_new = false;
-            let next_frame = lock(&shared.mailbox).pop_front();
+            let next_frame = {
+                let mut mailbox = lock(&shared.mailbox);
+                let mut display = lock(&shared.display);
+                next_display_frame(&mut mailbox, &mut display, Instant::now())
+            };
             if let Some(p) = next_frame {
                 if let Some(tex) = copy_in(&gpu, &cmd, &mut ring, &p.frame) {
                     let id = p.frame.source_id();
@@ -1140,16 +1074,6 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                             cur_arrived = p.arrived;
                             got_new = true;
                             s.real_frames += 1;
-                            // a picture for the prompt thread about every other frame (at most one is ever in flight)
-                            if settings.prompts
-                                && prompt_wait.is_none()
-                                && prompt_last.elapsed() >= Duration::from_millis(12)
-                            {
-                                prompt_last = Instant::now();
-                                if let Some(t) = gpu.luma_snapshot(&cmd) {
-                                    prompt_wait = Some((cmd.clone(), t));
-                                }
-                            }
                             if let (Some(pid), true) = (prev_id, awaiting.is_none() && settings.camera) {
                                 if let (Some(t0), Some(t1)) = (tl.content_time(pid), tl.content_time(id)) {
                                     awaiting = Some((cmd.clone(), t0, t1, gpu.motion_snapshot()));
@@ -1341,9 +1265,73 @@ fn camera_extra(
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_rate, quick_rate, requested_rate, RenderSettings, RepeatRule, MAX_REPEATS_IN_A_ROW, QUICK_WINDOW,
+        effective_rate, next_display_frame, quick_rate, requested_rate, DuplicateDisplay, RenderSettings, RepeatRule,
+        DISPLAY_TIMER_INTERVAL, DUPLICATE_DISPLAY_THRESHOLD, MAX_REPEATS_IN_A_ROW, QUICK_WINDOW,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn duplicate_fallback_waits_for_one_30_hz_interval() {
+        assert_eq!(DUPLICATE_DISPLAY_THRESHOLD, Duration::from_nanos(100_000_000 / 3));
+        assert_eq!(DISPLAY_TIMER_INTERVAL, Duration::from_nanos(50_000_000 / 3));
+    }
+
+    #[test]
+    fn duplicate_is_buffered_then_released_by_the_timer() {
+        let start = Instant::now();
+        let mut display = DuplicateDisplay::new(start);
+        assert_eq!(display.on_frame(1, false, start), Some(1));
+        assert_eq!(display.on_frame(2, true, start + Duration::from_millis(16)), None);
+        assert_eq!(display.timer_tick(start + DUPLICATE_DISPLAY_THRESHOLD - Duration::from_nanos(1)), None);
+        assert_eq!(display.timer_tick(start + DUPLICATE_DISPLAY_THRESHOLD), Some(2));
+        assert!(display.duplicate_display);
+    }
+
+    #[test]
+    fn a_late_duplicate_is_released_on_the_next_timer_check() {
+        let start = Instant::now();
+        let mut display = DuplicateDisplay::new(start);
+        assert_eq!(display.on_frame(1, false, start), Some(1));
+        let late = start + DUPLICATE_DISPLAY_THRESHOLD + Duration::from_millis(5);
+        assert_eq!(display.on_frame(2, true, late), None);
+        assert_eq!(display.timer_tick(late), Some(2));
+    }
+
+    #[test]
+    fn real_mailbox_frames_are_selected_before_due_duplicates() {
+        let start = Instant::now();
+        let mut display = DuplicateDisplay::new(start);
+        assert_eq!(display.on_frame(1, false, start), Some(1));
+        assert_eq!(display.on_frame(2, true, start + Duration::from_millis(16)), None);
+        let mut mailbox = std::collections::VecDeque::from([3]);
+
+        assert_eq!(next_display_frame(&mut mailbox, &mut display, start + DUPLICATE_DISPLAY_THRESHOLD), Some(3));
+        assert_eq!(next_display_frame(&mut mailbox, &mut display, start + DUPLICATE_DISPLAY_THRESHOLD), Some(2));
+    }
+
+    #[test]
+    fn a_new_picture_cancels_the_pending_duplicate() {
+        let start = Instant::now();
+        let mut display = DuplicateDisplay::new(start);
+        assert_eq!(display.on_frame(1, false, start), Some(1));
+        assert_eq!(display.on_frame(2, true, start + Duration::from_millis(16)), None);
+        assert_eq!(display.on_frame(3, false, start + Duration::from_millis(20)), Some(3));
+        assert_eq!(display.timer_tick(start + DUPLICATE_DISPLAY_THRESHOLD), None);
+        assert_eq!(display.last_timestamp, start + Duration::from_millis(20));
+    }
+
+    #[test]
+    fn the_first_picture_after_a_duplicate_fallback_keeps_the_fallback_timestamp() {
+        let start = Instant::now();
+        let mut display = DuplicateDisplay::new(start);
+        assert_eq!(display.on_frame(1, false, start), Some(1));
+        assert_eq!(display.on_frame(2, true, start + Duration::from_millis(16)), None);
+        let shown_at = start + DUPLICATE_DISPLAY_THRESHOLD;
+        assert_eq!(display.timer_tick(shown_at), Some(2));
+        assert_eq!(display.on_frame(3, false, shown_at + Duration::from_millis(16)), Some(3));
+        assert!(!display.duplicate_display);
+        assert_eq!(display.last_timestamp, shown_at);
+    }
 
     #[test]
     fn the_quick_rate_reads_the_last_half_second_and_needs_enough_pictures() {

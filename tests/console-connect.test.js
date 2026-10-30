@@ -23,6 +23,12 @@ test("a paired console not found on the network cannot be connected", () => {
   assert.equal(isConsoleLocked(state, () => false)("ps5-a"), true);
 });
 
+test("a console being checked cannot be connected", () => {
+  const state = { scannedOnce: false, found: new Map(), waking: new Set(), cool: new Map(), rechecking: new Set() };
+
+  assert.equal(isConsoleLocked(state, () => false)("ps5-a"), true);
+});
+
 test("a discovered console remains connectable when no other lock applies", () => {
   const state = {
     scannedOnce: true,

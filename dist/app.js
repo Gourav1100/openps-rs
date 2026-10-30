@@ -616,8 +616,8 @@ function renderShelf() {
     stat("Games on account", lib.games.length), stat("Completed", done), stat("Avg. progress", `${avg}%`));
 }
 
-// The same lock the Connect button uses: nothing starts while busy, unavailable, waking, or settling.
-const consoleLocked = (c) => busy() || S.waking.has(c.id) || S.cool.has(c.id) || S.rechecking.has(c.id) || statusOf(c) === "unknown";
+// The same lock the Connect button uses: nothing starts while busy, unavailable, checking, waking, or settling.
+const consoleLocked = (c) => busy() || S.waking.has(c.id) || S.cool.has(c.id) || S.rechecking.has(c.id) || statusOf(c) === "checking" || statusOf(c) === "unknown";
 function lockText(c) {
   if (S.waking.has(c.id)) return "The console is waking up…";
   if (S.cool.has(c.id)) return `Available in ${coolLeft(c.id)} s`;
@@ -1293,10 +1293,6 @@ function drawSettings() {
   cam.setAttribute("aria-disabled", String(!metal));
   cam.title = metal ? "" : "Needs the GPU, not available on this device";
   cam.onclick = () => { if (metal) save({ camera_comp: !s.camera_comp }); };
-  const pr = $("prompts-switch");
-  pr.setAttribute("aria-checked", String(!!s.show_prompts));
-  pr.onclick = () => save({ show_prompts: !s.show_prompts });
-  syncPrompts();
   const vol = $("volume");
   vol.value = String(s.volume ?? 100);
   paintVolume();
@@ -1431,7 +1427,6 @@ function renderSession() {
     clearInterval(audioTimer);
     audioTimer = setInterval(pollAudio, 3000);
     pollRender();
-    syncPrompts();
     clearInterval(renderTimer);
     renderTimer = setInterval(pollRender, 1000);
   } else {
@@ -1439,7 +1434,6 @@ function renderSession() {
     clearTimeout(hudTimer);
     clearInterval(audioTimer);
     clearInterval(renderTimer);
-    syncPrompts();
   }
   renderConsoles();
 }
@@ -1637,10 +1631,6 @@ function paintMapping() {
   b.setAttribute("aria-label", mapLabel);
 }
 $("map-btn").onclick = () => invoke("input_toggle").catch(() => {});
-$("prompts-btn").onclick = async () => {
-  if (!(await ensureSettings())) return;
-  save({ show_prompts: !S.settings.show_prompts }, true);
-};
 // ---- the key-map editor ----------------------------------------------------------------------------------------------------
 const ui = (event) => invoke("input_ui", { event }).catch(() => {});
 const nice = (c) => c.replaceAll("_", " ").toLowerCase();
@@ -1888,104 +1878,6 @@ function onInputEvent(e) {
   if (o.notice) log(`input: ${o.notice}`);
 }
 
-// ---- mapped keys drawn over the controller button prompts in the picture -------------------------------------------------------
-let promptTimer = 0;
-// The settings are normally loaded when the Settings screen opens; the stream screen's bar needs them too.
-async function ensureSettings() {
-  if (S.settings && S.saved) return true;
-  const [e, s] = await call("get_settings");
-  if (e) { toast(`Could not load settings: ${e}`, "error"); return false; }
-  S.settings = s;
-  S.saved = { ...s };
-  return true;
-}
-function paintPromptBtn() {
-  const on = !!(S.settings && S.settings.show_prompts);
-  const b = $("prompts-btn");
-  b.setAttribute("aria-pressed", String(on));
-  b.setAttribute("aria-label", on ? "Key hints: on" : "Key hints: off");
-  b.title = on ? "Key hints are on: the mapped key is drawn over each button the game shows" : "Show the mapped key over each button the game shows";
-}
-async function syncPrompts() {
-  if (S.hudOn) await ensureSettings();
-  paintPromptBtn();
-  const on = !!(S.settings && S.settings.show_prompts) && S.hudOn;
-  clearInterval(promptTimer);
-  promptTimer = 0;
-  // events carry the changes; a slow poll is only a safety net (a window resize, a missed event)
-  if (on) { pollPrompts(); promptTimer = setInterval(pollPrompts, 1500); } else { $("prompt-layer").replaceChildren(); capByTrack.clear(); }
-}
-// What a stick or D-pad icon shows: the four keys that move it, as W A S D (up, left, down, right). Arrow names become arrows.
-const PROMPT_MOUSE = { MOUSE_LEFT: "LMB", MOUSE_RIGHT: "RMB", MOUSE_MIDDLE: "MMB", MOUSE_BUTTON4: "M4", MOUSE_BUTTON5: "M5", SCROLL_UP: "↑ wheel", SCROLL_DOWN: "↓ wheel", SCROLL_LEFT: "← wheel", SCROLL_RIGHT: "→ wheel" };
-// One key name of the key map as it should read on a keycap ("UP_ARROW" → "↑", "KEY_1" → "1", "MOUSE_LEFT" → "LMB"); chords join with "+".
-function capText(name) {
-  return String(name).split("+").map((n) => {
-    if (PROMPT_MOUSE[n]) return PROMPT_MOUSE[n];
-    if (KEYCAP[n] !== undefined) return KEYCAP[n];
-    return /^KEY_\d$/.test(n) ? n.slice(4) : /^KP_\d$/.test(n) ? n.slice(3) : n.length > 3 ? n.replaceAll("_", " ").toLowerCase() : n;
-  }).join("+");
-}
-function keyText(keys, control) {
-  const pick = (c) => {
-    const k = keys.get(c);
-    return !k || k === "-" ? "" : capText(k);
-  };
-  if (control === "LEFT_STICK" || control === "RIGHT_STICK" || control === "DPAD") {
-    const side = control === "DPAD" ? "DPAD" : control;
-    const parts = ["UP", "LEFT", "DOWN", "RIGHT"].map((d) => pick(`${side}_${d}`));
-    if (parts.every((p) => !p)) return "";
-    return parts.every((p) => p.length === 1) ? parts.join("") : parts.map((p) => p || "·").join(" ");
-  }
-  return pick(control);
-}
-// Keycaps by track id: a glyph that is still there is updated in place (so it never flickers or jumps), a new one fades in, and one that has
-// gone fades out. Changes arrive as events the moment the renderer sees them.
-const capByTrack = new Map();
-const PROMPT_FADE_MS = 90;
-function dropCap(id, cap) {
-  capByTrack.delete(id);
-  cap.classList.remove("on");
-  setTimeout(() => cap.remove(), PROMPT_FADE_MS + 20);
-}
-function drawPrompts(r) {
-  const layer = $("prompt-layer");
-  const hits = (r && r.hits) || [];
-  const [vl, vb, vw, vh] = r.view || [0, 0, layer.clientWidth, layer.clientHeight];
-  if (!hits.length || !vw || !vh) { for (const [id, cap] of [...capByTrack]) dropCap(id, cap); return; }
-  // The picture is fitted, centred, inside the video view. That view fills the window under the title bar, while the page starts
-  // below it (the page is as tall as the view minus the title bar, and both end at the bottom edge), so the view's top in page
-  // coordinates is above 0. The app reports the view's size and its left/bottom offsets from the web view.
-  const vx = vl, vy = layer.clientHeight + vb - vh;
-  const a = r.aspect || 16 / 9;
-  const pw = Math.min(vw, vh * a), ph = pw / a, ox = vx + (vw - pw) / 2, oy = vy + (vh - ph) / 2;
-  const keys = new Map(((S.ov && S.ov.rows) || []).map((row) => [row.control, row.primary]));
-  const live = new Set();
-  for (const h of hits) {
-    const text = keyText(keys, h.kind);
-    if (!text) continue;
-    live.add(h.id);
-    const w = h.w * pw, hh = h.h * ph;
-    const round = ["CROSS", "CIRCLE", "SQUARE", "TRIANGLE", "LEFT_STICK", "RIGHT_STICK"].includes(h.kind);
-    const side = Math.max(round ? Math.min(w, hh) * 1.05 : hh * 1.05, 14);
-    const fit = (side * 0.95) / Math.max(1, text.length * 0.62);
-    let cap = capByTrack.get(h.id);
-    if (!cap) {
-      cap = el("span", { className: "prompt-cap" });
-      layer.append(cap);
-      capByTrack.set(h.id, cap);
-      requestAnimationFrame(() => requestAnimationFrame(() => cap.classList.add("on")));
-    }
-    if (cap.textContent !== text) cap.textContent = text;
-    cap.title = `${h.kind.replace("_", " ").toLowerCase()} is ${text}`;
-    cap.style.cssText = `left:${ox + h.x * pw}px;top:${oy + h.y * ph}px;min-width:${round ? side : Math.max(w * 1.05, side)}px;height:${side}px;font-size:${Math.max(8, Math.min(side * 0.58, fit))}px;border-radius:${round ? "50%" : "0.4em"}`;
-  }
-  for (const [id, cap] of [...capByTrack]) if (!live.has(id)) dropCap(id, cap);
-}
-async function pollPrompts() {
-  const [, r] = await call("prompt_hits");
-  if (r) drawPrompts(r);
-}
-
 // The numbers at the top of the stream can be hidden (the choice is remembered).
 let statsOn = true;
 try { statsOn = localStorage.getItem("openps.stats") !== "off"; } catch { /* storage unavailable: keep them on */ }
@@ -2152,7 +2044,6 @@ listen("openps://event", ({ payload: e }) => {
     case "psn_changed": loadPsn(); paintPsnApi(); break;
     case "stats": onStats(e); break;
     case "input": onInputEvent(e); break;
-    case "prompts": if (S.settings && S.settings.show_prompts) drawPrompts(e); break;
     case "control":
       if (e.kind === "data_damaged") showNotice(e.kind, e.detail);
       else if (e.kind === "input_error") toast(`Keyboard and mouse control did not start: ${e.detail}`, "error");

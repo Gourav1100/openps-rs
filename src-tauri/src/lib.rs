@@ -275,7 +275,6 @@ fn build_core(app: &AppHandle, data_dir: PathBuf, look: openps_metal::look::Shar
     #[cfg(target_os = "macos")]
     if let Some(v) = &parts.video {
         app.manage(VideoHandle(v.clone()));
-        v.watch_prompts(app.clone());
     }
     #[cfg(target_os = "macos")]
     if let Some(a) = &parts.audio {
@@ -399,26 +398,6 @@ fn apply_video(app: &AppHandle, o: &StreamOptions) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, o);
-}
-
-/// Controller button prompts found in the picture (empty unless "show mapped keys" is on).
-#[tauri::command]
-async fn prompt_hits(app: AppHandle) -> serde_json::Value {
-    #[cfg(target_os = "macos")]
-    if let Some(v) = app.try_state::<VideoHandle>() {
-        if let Some(d) = app.try_state::<DataDir>() {
-            v.0.dump_prompt_scan(&d.0.join("logs"));
-        }
-        let mut out = v.0.prompt_hits();
-        if let Some(w) = app.get_webview_window("main") {
-            if let Some(r) = v.0.view_rect(&w) {
-                out["view"] = serde_json::json!(r);
-            }
-        }
-        return out;
-    }
-    let _ = &app;
-    serde_json::json!({ "aspect": 1.78, "scans": 0, "hits": [] })
 }
 
 /// Records the frames the console sends for `seconds` seconds (10..=120) and reports how many were new pictures: the way to see what a game
@@ -731,7 +710,6 @@ pub fn run() {
             input::input_config_reset,
             get_settings,
             render_stats,
-            prompt_hits,
             input::input_profiles,
             input::migrate_game_maps,
             frame_diagnostic,

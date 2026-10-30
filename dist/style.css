@@ -609,11 +609,6 @@ body:has(.hud:not([hidden])) .toasts { bottom: auto; top: calc(max(.75rem, env(s
 .kcap.mouse { position: relative; }
 .kcap .mbadge { position: absolute; right: -.1rem; bottom: -.15rem; font: 700 .6rem/1 var(--mono, monospace); font-style: normal; color: #fff; background: #3a4468; border-radius: 4px; padding: .08rem .18rem; }
 @media (prefers-reduced-motion: reduce) { .ov-table .bind[aria-pressed="true"] { animation: none; } }
-.prompt-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.prompt-cap { opacity: 0; transition: opacity .09s linear, left .05s linear, top .05s linear; position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; justify-content: center; padding: 0 .3em; box-sizing: border-box; border-radius: .35em; background: #f4f5f8; color: #111522; border: 2px solid #11152299; box-shadow: 0 1px 4px #0008; font: 700 12px var(--mono); white-space: nowrap; }
-.prompt-cap.on { opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .prompt-cap { transition: none; } }
-
 .pin-btn { all: unset; box-sizing: border-box; width: 1.7rem; height: 1.7rem; display: grid; place-items: center; border-radius: 9px; color: #cfd8f5; cursor: pointer; border: 1px solid transparent; transition: background .15s, color .15s; }
 .pin-btn svg { width: 1rem; height: 1rem; }
 .pin-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
