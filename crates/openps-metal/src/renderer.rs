@@ -726,10 +726,12 @@ fn quick_rate(times: &std::collections::VecDeque<Instant>, now: Instant, window:
         return None;
     }
     let span = recent.last()?.duration_since(**recent.first()?).as_secs_f64();
-    (span > 0.05).then(|| (recent.len() - 1) as f64 / span)
+    let rate = (recent.len() - 1) as f64 / span;
+    (span > 0.025 && rate >= QUICK_MIN_RATE).then_some(rate)
 }
 
-const QUICK_MIN: usize = 8;
+const QUICK_MIN: usize = 3;
+const QUICK_MIN_RATE: f64 = 15.0;
 const QUICK_WINDOW: Duration = Duration::from_millis(500);
 
 /// One frame in the diagnostic: `(frame id, seconds since start, changed sample bytes (usize::MAX = unknown), new picture, accepted)`.
@@ -1337,8 +1339,8 @@ mod tests {
     fn the_quick_rate_reads_the_last_half_second_and_needs_enough_pictures() {
         let now = Instant::now();
         let at = |ms: u64| now - Duration::from_millis(ms);
-        // 60 pictures a second over the last 150 ms
-        let t: std::collections::VecDeque<Instant> = (0..10).map(|i| at(150 - i * 17)).collect();
+        // About 60 pictures a second over the last 160 ms; keep every timestamp at or before `now`.
+        let t: std::collections::VecDeque<Instant> = (0..10).map(|i| at(160 - i * 17)).collect();
         let q = quick_rate(&t, now, QUICK_WINDOW).unwrap();
         assert!((q - 59.0).abs() < 4.0, "{q}");
         // a loading screen: a picture every 100 ms is too few to say anything quickly
@@ -1347,6 +1349,24 @@ mod tests {
         // pictures that are older than the window do not count
         let old: std::collections::VecDeque<Instant> = (0..20).map(|i| at(900 + i * 17)).collect();
         assert_eq!(quick_rate(&old, now, QUICK_WINDOW), None);
+    }
+
+    #[test]
+    fn the_quick_rate_detects_a_rising_source_rate_with_five_pictures() {
+        let now = Instant::now();
+        let times: std::collections::VecDeque<Instant> =
+            (0..5).map(|i| now - Duration::from_millis(68 - i * 17)).collect();
+        let rate = quick_rate(&times, now, QUICK_WINDOW).unwrap();
+        assert!((rate - 59.0).abs() < 4.0, "{rate}");
+    }
+
+    #[test]
+    fn the_quick_rate_can_raise_pacing_after_three_fast_pictures() {
+        let now = Instant::now();
+        let times: std::collections::VecDeque<Instant> =
+            (0..3).map(|i| now - Duration::from_millis(34 - i * 17)).collect();
+        let rate = quick_rate(&times, now, QUICK_WINDOW).unwrap();
+        assert!((rate - 59.0).abs() < 4.0, "{rate}");
     }
 
     /// A recording from a real console (a game at about 30 fps in a 60 fps stream): the changed-byte count of every frame, as the

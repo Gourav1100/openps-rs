@@ -243,6 +243,10 @@ fn long_run_does_not_grow_memory() {
 #[test]
 fn creating_and_dropping_many_decoders_is_clean() {
     let (s, units) = units(Codec::H264, "h264.annexb");
+    // Exclude VideoToolbox's one-time process initialization/cache from the incremental growth measurement.
+    let mut warmup = decoder(Codec::H264, &s);
+    warmup.decode_annex_b(&units[0], 0).unwrap();
+    drop(warmup);
     let before = max_rss_mb();
     for _ in 0..150 {
         let mut d = decoder(Codec::H264, &s);
