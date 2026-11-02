@@ -67,8 +67,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>openps-app</string>
 <key>CFBundleIconFile</key><string>icon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>${version:-0.1.0}</string>
-<key>CFBundleVersion</key><string>${version:-0.1.0}</string>
+<key>CFBundleShortVersionString</key><string>${version:-0.2.0}</string>
+<key>CFBundleVersion</key><string>${version:-0.2.0}</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSApplicationCategoryType</key><string>public.app-category.games</string>

@@ -2676,7 +2676,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openps-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "objc2",
@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "openps-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "openps-core",
  "openps-stream",
@@ -2716,7 +2716,7 @@ dependencies = [
 
 [[package]]
 name = "openps-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "openps-crypto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "openps-demo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "openps-audio",
  "openps-core",
@@ -2768,18 +2768,18 @@ dependencies = [
 
 [[package]]
 name = "openps-discovery"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "socket2 0.5.10",
 ]
 
 [[package]]
 name = "openps-fec"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "openps-gamepad"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "crc32fast",
@@ -2796,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "openps-input"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "indexmap 2.14.2",
  "serde",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "openps-macinput"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "openps-input",
  "serde_json",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "openps-metal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "objc2",
@@ -2832,18 +2832,18 @@ dependencies = [
 
 [[package]]
 name = "openps-packets"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "openps-pad"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "openps-input",
 ]
 
 [[package]]
 name = "openps-psn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "rand_core 0.6.4",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "openps-remote"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "openps-crypto",
@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "openps-rp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "openps-crypto",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "openps-session"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "openps-crypto",
@@ -2900,7 +2900,7 @@ dependencies = [
 
 [[package]]
 name = "openps-stream"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "openps-crypto",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "openps-takion"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "openps-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "openps-crypto",
@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "openps-video"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "objc2",
  "openps-core",
