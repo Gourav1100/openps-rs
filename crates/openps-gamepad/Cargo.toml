@@ -1,0 +1,20 @@
+[package]
+name = "openps-gamepad"
+version.workspace = true
+edition.workspace = true
+description = "Physical DualSense / DualShock 4 support: raw pad values -> ControllerState, pad sources and sinks"
+
+[dependencies]
+openps-input = { path = "../openps-input" }
+openps-stream = { path = "../openps-stream" }
+hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
+crc32fast = "1"
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-game-controller = "0.3.2"
+dispatch2 = "0.3"
+objc2-core-haptics = "0.3.2"

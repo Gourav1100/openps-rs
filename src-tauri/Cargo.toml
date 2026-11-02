@@ -26,12 +26,14 @@ tauri-plugin-log = "2"
 openps-fec = { path = "../crates/openps-fec" }
 openps-core = { path = "../crates/openps-core" }
 openps-input = { path = "../crates/openps-input" }
+openps-gamepad = { path = "../crates/openps-gamepad" }
 openps-psn = { path = "../crates/openps-psn" }
 openps-rp = { path = "../crates/openps-rp" }
 openps-discovery = { path = "../crates/openps-discovery" }
 openps-remote = { path = "../crates/openps-remote", optional = true }
 rand_core = { version = "0.6", features = ["getrandom"] }
 openps-takion = { path = "../crates/openps-takion" }
+openps-stream = { path = "../crates/openps-stream" }
 
 [features]
 # Built-in pretend console (OPENPS_DEMO=hevc|h264) for UI work and end-to-end testing. Never contacts a network.

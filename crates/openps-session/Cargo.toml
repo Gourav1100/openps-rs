@@ -8,6 +8,7 @@ description = "Session runtime: drives the sans-IO handshake and stream engine o
 openps-input = { path = "../openps-input" }
 openps-stream = { path = "../openps-stream" }
 openps-takion = { path = "../openps-takion" }
+log = "0.4"
 socket2 = "0.5"
 
 [dev-dependencies]

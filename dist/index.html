@@ -195,8 +195,19 @@
         <p class="hint" id="diag-out">While a game is streaming, records how many frames the console sends and how many are new pictures (a game that runs below the stream's rate repeats pictures). Saved to the logs folder.</p></fieldset>
       <p class="muted small mt">PS4 consoles always stream H.264 regardless of the codec setting.</p>
 
-      <div class="section-head mt"><div><h2>Controls</h2><p class="muted">Keyboard and mouse play. Turn it on with F10 while you are streaming.</p></div></div>
+      <div class="section-head mt"><div><h2>Controls</h2><p class="muted">Choose how to play while streaming. F10 switches between a connected controller and keyboard and mouse.</p></div></div>
       <div class="card form">
+        <fieldset class="field controller-setting">
+          <legend>Connected controllers</legend>
+          <ul id="controller-list" class="controller-list" aria-live="polite" aria-busy="true">
+            <li class="muted">Checking for controllers…</li>
+          </ul>
+        </fieldset>
+        <div class="field controller-setting">
+          <label for="controller-deadzone">Stick deadzone <output id="controller-deadzone-out" for="controller-deadzone">8%</output></label>
+          <input id="controller-deadzone" class="range" type="range" min="0" max="0.5" step="0.01" value="0.08" aria-describedby="controller-deadzone-hint">
+          <p class="hint" id="controller-deadzone-hint">Ignores small stick movements around the centre. Applies to connected controllers immediately.</p>
+        </div>
         <dl class="keys" id="shortcuts">
           <div><dt><kbd>F10</kbd></dt><dd>Keyboard and mouse on / off</dd></div>
           <div><dt><kbd>F7</kbd></dt><dd>Next key profile</dd></div>

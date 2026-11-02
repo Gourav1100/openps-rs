@@ -29,6 +29,7 @@ In demo mode: **Add console**, pick *Demo PS5*, type any 8 digits except `000000
 |---|---|
 | `scripts/build.sh [--check] [--demo] [--psn-live] [--app] [--debug]` | Build. `--check` first runs fmt, clippy and all tests. `--app` also makes a bundle with the Tauri CLI (if you already have it). |
 | `scripts/install.sh [--dest DIR] [--psn-config F] [--tables F] [--no-credentials]` | Build and create `DIR/OpenPS.app` (default `./install`), ad-hoc signed, optionally with credentials inside. Keeps existing app data. Refuses system folders, never uses `sudo`. |
+| `scripts/make-dmg.sh [--output FILE] [--demo]` | Build a drag-and-drop installer at `target/openps_<version>_macos_<architecture>-Pre-release.dmg` (or `FILE`); the image includes an `/Applications` shortcut and excludes local credential override files. |
 | `scripts/uninstall.sh [--dest DIR] [--keep-data]` | Remove the app; its data is inside it. `--keep-data` backs the data up first. |
 | `scripts/demo.sh [h264\|hevc] [--clip FILE] [--fps N]` | Build with the demo console and run it. |
 | `scripts/make_icons.py` | Regenerate every icon (PNG set, `.icns`, `.ico`, `dist/logo.svg`, `dist/logo.css`). Needs Pillow. |
@@ -82,6 +83,7 @@ Real-footage frame-generation report: `OPENPS_REAL_DIR=<dir> cargo test -p openp
 ## Documentation
 
 * `docs/USAGE.md`: pairing, playing, controls, settings, troubleshooting
+* `RELEASE_NOTES.md`: release notes and known limitations
 * `../analysis/spec/`: protocol specifications, implementation status (`05`), frame-generation research and measurements (`06`), test report (`07`), UX requirements (`08`)
 
 ## Security and privacy

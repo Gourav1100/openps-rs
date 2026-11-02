@@ -11,6 +11,7 @@ use crate::padblob::{self, PadOutput};
 use crate::video::{Frame, Outcome, Unit, VideoAssembler};
 use openps_crypto::{Context, KeyPosTracker};
 use openps_input::state::ControllerState;
+use openps_input::trace;
 use openps_packets::{
     build_congestion, build_feedback, gmac_key_pos_offsets, packet_type, AudioPacket, FeedbackSeq, HistorySeq,
     PacketType, VideoPacket,
@@ -27,7 +28,10 @@ pub const IDR_MIN_INTERVAL_S: f64 = 0.150;
 pub const FIRST_RETRY_S: f64 = 0.066;
 pub const RETRY_S: f64 = 0.150;
 pub const MAX_RETRIES: u32 = 3;
+/// A controller join is retried for much longer than an IDR request: PXPlay gives up after 15 tries (about 2.3 s).
+pub const PAD_CONN_MAX_RETRIES: u32 = 15;
 pub const CONGESTION_INTERVAL_S: f64 = 1.0;
+const STATE_RESEND_S: f64 = 0.1;
 pub const MAX_PADS: usize = 4;
 
 #[derive(Clone, Debug)]
@@ -66,6 +70,7 @@ struct Retry {
     payload: Vec<u8>,
     next_at: f64,
     resends: u32,
+    max_resends: u32,
 }
 
 /// Loss estimate for the congestion packet (spec 7.3): ratio 0 for the first sample, the combined ratio for
@@ -129,8 +134,20 @@ pub struct Stream {
     pad_conn: [Option<Retry>; MAX_PADS],
     congestion: Congestion,
     next_congestion_at: f64,
+    /// Last tick time, and when each pad's state packet was last sent (a lost one must not leave a stick stuck).
+    clock: f64,
+    state_sent_at: [f64; MAX_PADS],
     started_at: Option<f64>,
     recv_seq: SeqWindow,
+    /// Sequences of the history packets that were traced when built (only used with `OPENPS_INPUT_TRACE`), so the session can
+    /// log what the socket did with exactly those and not with the idle repeats.
+    traced_history: VecDeque<u16>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryCause {
+    Change,
+    Idle,
 }
 
 /// Sliding window of the last 64 received DATA sequence numbers (32-bit wrapping) for de-duplication.
@@ -195,8 +212,11 @@ impl Stream {
             pad_conn: [None, None, None, None],
             congestion: Congestion::default(),
             next_congestion_at: 0.0,
+            clock: 0.0,
+            state_sent_at: [0.0; MAX_PADS],
             started_at: None,
             recv_seq: SeqWindow::default(),
+            traced_history: VecDeque::new(),
         }
     }
 
@@ -205,6 +225,14 @@ impl Stream {
     }
     pub fn takion_version(&self) -> i32 {
         self.version
+    }
+
+    /// True once for each history packet whose construction was traced; the session uses it to trace the same packet's send.
+    pub fn take_traced_history(&mut self, seq: u16) -> bool {
+        match self.traced_history.iter().position(|s| *s == seq) {
+            Some(i) => self.traced_history.remove(i).is_some(),
+            None => false,
+        }
     }
 
     // ---- outbound primitives ------------------------------------------------------------------
@@ -378,7 +406,14 @@ impl Stream {
         self.last_idr_at = now;
         let payload = TakionMessage::of_type(msg_type::IDR_REQUEST).to_chunk_payload();
         let seq = self.send_data(class::GENERAL, payload.clone());
-        self.idr = Some(Retry { seq, class: class::GENERAL, payload, next_at: now + FIRST_RETRY_S, resends: 0 });
+        self.idr = Some(Retry {
+            seq,
+            class: class::GENERAL,
+            payload,
+            next_at: now + FIRST_RETRY_S,
+            resends: 0,
+            max_resends: MAX_RETRIES,
+        });
     }
 
     /// Announce a pad joining (controller type 6) or leaving (0); retried like the IDR request until acked.
@@ -394,8 +429,14 @@ impl Stream {
         });
         let payload = m.to_chunk_payload();
         let seq = self.send_data(class::GENERAL, payload.clone());
-        self.pad_conn[pad] =
-            Some(Retry { seq, class: class::GENERAL, payload, next_at: now + FIRST_RETRY_S, resends: 0 });
+        self.pad_conn[pad] = Some(Retry {
+            seq,
+            class: class::GENERAL,
+            payload,
+            next_at: now + FIRST_RETRY_S,
+            resends: 0,
+            max_resends: PAD_CONN_MAX_RETRIES,
+        });
         let p = self.pads[pad].get_or_insert_with(|| PadFeedback::new(pad as u8));
         p.presence(connected);
     }
@@ -418,11 +459,20 @@ impl Stream {
         }
         let p = self.pads[pad].get_or_insert_with(|| PadFeedback::new(pad as u8));
         let u = p.update(st, now);
+        if trace::enabled() {
+            log::info!(
+                "input_trace t={} stage=feedback_encode pad={pad} state_changed={} history_changed={} {}",
+                trace::now_us(),
+                u.state_changed,
+                u.history_changed,
+                trace::brief(st)
+            );
+        }
         if u.state_changed {
             self.send_feedback_state(pad);
         }
         if u.history_changed {
-            self.send_feedback_history(now, pad);
+            self.send_feedback_history(now, pad, HistoryCause::Change);
         }
     }
 
@@ -435,7 +485,8 @@ impl Stream {
         self.send_feedback_state(pad);
     }
 
-    fn send_feedback(&mut self, kind: u8, seq: u16, payload: Vec<u8>) {
+    /// Protects and queues one feedback packet; returns what identifies it on the wire (keyPos, length, GMAC).
+    fn send_feedback(&mut self, kind: u8, seq: u16, payload: Vec<u8>) -> (u32, usize, [u8; 4]) {
         let ptype = if kind == 6 { PacketType::Feedback } else { PacketType::FeedbackHistory };
         let (gmac_off, kp_off) = gmac_key_pos_offsets(ptype, self.t20).expect("feedback offsets");
         let hdr = if self.t20 { 20 } else { 12 };
@@ -445,23 +496,52 @@ impl Stream {
         p[kp_off..kp_off + 4].copy_from_slice(&kp.to_be_bytes()); // keyPos is part of the GMAC input here
         let tag = self.local.gmac(kp, &p);
         p[gmac_off..gmac_off + 4].copy_from_slice(&tag);
+        let len = p.len();
         self.out.push_back(p);
+        (kp, len, tag)
     }
 
     fn send_feedback_state(&mut self, pad: usize) {
         let v = self.version as u32;
+        self.state_sent_at[pad] = self.clock;
         let payload = self.pads[pad].as_mut().unwrap().state_payload(v);
         let seq = self.feedback_seq.next_seq();
         self.send_feedback(6, seq, payload);
     }
 
-    fn send_feedback_history(&mut self, now: f64, pad: usize) {
-        let payload = self.pads[pad].as_mut().unwrap().history_payload(now);
-        if payload.is_empty() {
-            return;
+    /// Why a history packet is being sent. Only `Change` is traced: the idle repeat would fill the log with identical
+    /// lines ten times a second and rotate the interesting part away.
+    fn send_feedback_history(&mut self, now: f64, pad: usize, cause: HistoryCause) {
+        let packets = if cause == HistoryCause::Change {
+            // The console applies one new event per history packet: send one packet per event, oldest first.
+            self.pads[pad].as_mut().unwrap().take_history_packets(now)
+        } else {
+            vec![self.pads[pad].as_mut().unwrap().history_payload(now)]
+        };
+        for payload in packets.into_iter().filter(|p| !p.is_empty()) {
+            self.send_history_packet(pad, payload, cause);
         }
+    }
+
+    fn send_history_packet(&mut self, pad: usize, payload: Vec<u8>, cause: HistoryCause) {
         let seq = self.history_seq.next_seq();
-        self.send_feedback(1, seq, payload);
+        let traced = trace::enabled() && cause == HistoryCause::Change;
+        let hex = traced.then(|| payload.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let (key_pos, len, gmac) = self.send_feedback(1, seq, payload);
+        if let Some(hex) = hex {
+            if self.traced_history.len() >= 64 {
+                self.traced_history.pop_front();
+            }
+            self.traced_history.push_back(seq);
+            log::info!(
+                "input_trace t={} stage=wire_protect kind=history cause={cause:?} pad={pad} seq={seq} key_pos={key_pos} len={len} gmac={:02x}{:02x}{:02x}{:02x} payload={hex}",
+                trace::now_us(),
+                gmac[0],
+                gmac[1],
+                gmac[2],
+                gmac[3]
+            );
+        }
     }
 
     // ---- timers ---------------------------------------------------------------------------------------------------
@@ -470,7 +550,7 @@ impl Stream {
         let mut due: Vec<(u32, u32, Vec<u8>)> = vec![];
         for r in self.idr.iter_mut().chain(self.pad_conn.iter_mut().flatten()) {
             if now >= r.next_at {
-                if r.resends >= MAX_RETRIES {
+                if r.resends >= r.max_resends {
                     r.seq = u32::MAX;
                     continue;
                 }
@@ -491,10 +571,17 @@ impl Stream {
             let p = self.protect_control(&Chunk::data(self.tag, seq, class, payload)); // same sequence, fresh keyPos
             self.out.push_back(p);
         }
+        self.clock = now;
+        // the state packet is repeated while idle, like the history, so one lost datagram cannot leave a stick stuck
+        for pad in 0..MAX_PADS {
+            if self.pads[pad].is_some() && now - self.state_sent_at[pad] >= STATE_RESEND_S {
+                self.send_feedback_state(pad);
+            }
+        }
         // history self-heals every 100 ms
         for pad in 0..MAX_PADS {
             if self.pads[pad].as_ref().is_some_and(|p| p.history_due(now)) {
-                self.send_feedback_history(now, pad);
+                self.send_feedback_history(now, pad, HistoryCause::Idle);
             }
         }
         // congestion report once per second

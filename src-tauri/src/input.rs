@@ -80,11 +80,15 @@ impl Output for AppOutput {
     fn pad(&mut self, state: &ControllerState) {
         self.look.push(openps_metal::now(), state.right_x as f32, state.right_y as f32);
         *LAST_PAD.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
+        if crate::pads::controller_active(&self.app) {
+            return; // the physical pad owns the console until Controls is pressed
+        }
         if let Some(core) = self.app.try_state::<Core>() {
             let _ = core.set_pad(with_ps(state.clone())); // NotConnected between sessions is expected
         }
     }
     fn overlay(&mut self, state: &OverlayState) {
+        crate::pads::set_keyboard_mode(&self.app, state.mapping);
         // the front end shows the mapping status; the full overlay editor is not built yet
         if let Ok(v) = serde_json::to_value(state) {
             let _ = self.app.emit(crate::EVENT, serde_json::json!({ "type": "input", "overlay": v }));
@@ -188,8 +192,14 @@ fn stop(app: &AppHandle) {
 pub fn on_event(app: &AppHandle, ev: &AppEvent) {
     if let AppEvent::Session(s) = ev {
         match s {
-            SessionState::Connected { .. } => start(app),
-            SessionState::Closed { .. } | SessionState::Failed { .. } | SessionState::Idle => stop(app),
+            SessionState::Connected { .. } => {
+                start(app);
+                crate::pads::session_started(app);
+            }
+            SessionState::Closed { .. } | SessionState::Failed { .. } | SessionState::Idle => {
+                stop(app);
+                crate::pads::session_ended(app);
+            }
             _ => {}
         }
     }

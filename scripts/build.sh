@@ -20,6 +20,7 @@ done
 
 [[ $(uname -s) == Darwin ]] || { echo "OpenPS builds on macOS only (VideoToolbox, Metal)." >&2; exit 1; }
 command -v cargo >/dev/null || { echo "Rust is required: https://rustup.rs (not installed by this script)." >&2; exit 1; }
+mkdir -p target/tmp   # .cargo/config.toml points TMPDIR here; compilers fail if it is missing
 
 features=(tauri/custom-protocol)
 (( demo )) && features+=(demo)

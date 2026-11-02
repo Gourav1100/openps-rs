@@ -858,6 +858,28 @@ impl Core {
         Ok(())
     }
 
+    /// State of a physical pad in console slot `pad` (slot 0 is shared with the key map; only one of them writes at a time).
+    pub fn set_pad_slot(&self, pad: usize, state: openps_input::state::ControllerState) -> Result<(), CoreError> {
+        self.commander()?.set_pad(pad, state);
+        Ok(())
+    }
+
+    pub fn set_pad_connected(&self, pad: usize, connected: bool) -> Result<(), CoreError> {
+        self.commander()?.send(openps_session::Command::PadConnected { pad, connected });
+        Ok(())
+    }
+
+    pub fn set_pad_sensors(
+        &self,
+        pad: usize,
+        gyro: [f32; 3],
+        accel: [f32; 3],
+        orientation: [f32; 4],
+    ) -> Result<(), CoreError> {
+        self.commander()?.send(openps_session::Command::Sensors { pad, gyro, accel, orientation });
+        Ok(())
+    }
+
     pub fn request_keyframe(&self) -> Result<(), CoreError> {
         self.commander()?.request_idr();
         Ok(())

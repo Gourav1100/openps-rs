@@ -1564,6 +1564,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hidapi"
+version = "2.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "818c0e1d27887aaf76fe737042e27a66b796a7b099e6d2e1a72d106c2dff3fa6"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "pkg-config",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2383,6 +2396,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
+dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-cloud-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2427,6 +2450,18 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-io-surface",
+]
+
+[[package]]
+name = "objc2-core-haptics"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbf2dae8a5e651adec3af54059cbce15e3aadbf8913da9782e1e1affc29aa512"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-avf-audio",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -2500,6 +2535,21 @@ dependencies = [
  "libc",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-game-controller"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1962c1882c5abcedb18e5f01acffeaad7b3cbd0a9d4cd8f5ca259ba8a64cb9a3"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -2635,12 +2685,14 @@ dependencies = [
  "openps-demo",
  "openps-discovery",
  "openps-fec",
+ "openps-gamepad",
  "openps-input",
  "openps-macinput",
  "openps-metal",
  "openps-psn",
  "openps-remote",
  "openps-rp",
+ "openps-stream",
  "openps-takion",
  "openps-video",
  "rand_core 0.6.4",
@@ -2724,6 +2776,23 @@ dependencies = [
 [[package]]
 name = "openps-fec"
 version = "0.1.0"
+
+[[package]]
+name = "openps-gamepad"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "crc32fast",
+ "dispatch2",
+ "hidapi",
+ "log",
+ "objc2",
+ "objc2-core-haptics",
+ "objc2-foundation",
+ "objc2-game-controller",
+ "openps-input",
+ "openps-stream",
+]
 
 [[package]]
 name = "openps-input"
@@ -2820,6 +2889,7 @@ dependencies = [
 name = "openps-session"
 version = "0.1.0"
 dependencies = [
+ "log",
  "openps-crypto",
  "openps-input",
  "openps-stream",
@@ -2832,6 +2902,7 @@ dependencies = [
 name = "openps-stream"
 version = "0.1.0"
 dependencies = [
+ "log",
  "openps-crypto",
  "openps-fec",
  "openps-input",

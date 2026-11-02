@@ -43,6 +43,7 @@ const S = {
   found: new Map(), // paired console id -> discovery result
   nearby: [], // discovered, not paired
   session: { state: "idle" },
+  controller: null,
   psn: null,
   settings: null,
   activeId: null,
@@ -133,7 +134,7 @@ function showView(name) {
   $("page-title").textContent = TITLES[name];
   if (changed) hideBanner(); // a stale error must not follow the user to another page
   if (name === "activity") renderLog();
-  if (name === "settings") { renderSettings(); paintKeymap(); paintPsnApi(); }
+  if (name === "settings") { renderSettings(); renderControllerSettings(); paintKeymap(); paintPsnApi(); }
   if (name === "about") renderAbout();
   if (name === "consoles") refreshConsoles();
 }
@@ -1230,6 +1231,54 @@ async function renderSettings() {
   S.saved = { ...s };
   drawSettings();
 }
+async function renderControllerSettings() {
+  const list = $("controller-list");
+  list.setAttribute("aria-busy", "true");
+  const [error, status] = await call("controller_status");
+  list.setAttribute("aria-busy", "false");
+  if (error) {
+    list.replaceChildren(el("li", { className: "controller-empty", role: "status", textContent: `Could not load controllers: ${error}` }));
+    return toast(`Could not load controller settings: ${error}`, "error");
+  }
+  S.controller = status;
+  S.input.mapping = status.keyboardMode;
+  paintMapping();
+  const deadzone = $("controller-deadzone");
+  deadzone.value = String(status.deadzone);
+  $("controller-deadzone-out").textContent = `${Math.round(status.deadzone * 100)}%`;
+  if (!status.pads.length) {
+    list.replaceChildren(el("li", { className: "controller-empty", textContent: "No compatible controller is connected." }));
+    return;
+  }
+  list.replaceChildren(...status.pads.map((pad) => {
+    const battery = Number.isFinite(pad.batteryLevel)
+      ? `${Math.round(pad.batteryLevel * 100)}%${pad.charging ? " · charging" : ""}`
+      : "Battery unavailable";
+    return el("li", { className: "controller-item" },
+      el("span", { className: "controller-name", textContent: pad.name }),
+      el("span", { className: "controller-meta", textContent: `${pad.kind} · Slot ${pad.slot + 1} · ${battery}` }));
+  }));
+}
+function paintControllerMode() {
+  const keyboardMode = S.input.mapping;
+  $("map-text").textContent = keyboardMode ? "Keyboard + mouse" : "Controller";
+}
+$("controller-deadzone").addEventListener("input", () => {
+  $("controller-deadzone-out").textContent = `${Math.round(Number($("controller-deadzone").value) * 100)}%`;
+});
+$("controller-deadzone").addEventListener("change", async () => {
+  const deadzone = Number($("controller-deadzone").value);
+  const [error, applied] = await call("controller_set_deadzone", { deadzone });
+  if (error) {
+    toast(`Could not set stick deadzone: ${error}`, "error");
+    if (S.controller) {
+      $("controller-deadzone").value = String(S.controller.deadzone);
+      $("controller-deadzone-out").textContent = `${Math.round(S.controller.deadzone * 100)}%`;
+    }
+    return;
+  }
+  S.controller.deadzone = applied;
+});
 function drawSettings() {
   const s = S.settings;
   const hevcOk = S.info.hevc;
@@ -1629,6 +1678,7 @@ function paintMapping() {
   // the tile says "Controls" and lights up when on; the profile name is in the tooltip and the accessible name (captions can be hidden)
   b.title = S.input.notice ? S.input.notice : `${mapLabel} (F10)`;
   b.setAttribute("aria-label", mapLabel);
+  paintControllerMode();
 }
 $("map-btn").onclick = () => invoke("input_toggle").catch(() => {});
 // ---- the key-map editor ----------------------------------------------------------------------------------------------------
@@ -2057,6 +2107,9 @@ listen("openps://event", ({ payload: e }) => {
       break;
   }
 });
+listen("openps://pads", () => {
+  if (S.view === "settings") renderControllerSettings();
+}).catch((e) => log(`Could not listen for controller changes: ${errText(e)}`, "error"));
 
 window.addEventListener("error", (ev) => /ResizeObserver/i.test(ev.message) || toast(`Unexpected error: ${ev.message}`, "error"));
 window.addEventListener("unhandledrejection", (ev) => toast(`Unexpected error: ${errText(ev.reason)}`, "error"));

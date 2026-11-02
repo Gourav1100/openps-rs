@@ -189,6 +189,33 @@ fn pad_connection_is_announced_with_type_6_and_retried_until_acked() {
 }
 
 #[test]
+fn a_pad_join_is_retried_about_fifteen_times_while_an_idr_request_gives_up_after_three() {
+    // PXPlay (ee$2) retries the controller-connection message every 150 ms and gives up at 15 (about 2.3 s); chiaki-ng resends DATA for
+    // about 5 s. A join lost to one Wi-Fi hiccup must not leave the pad ignored by the console for the whole session.
+    let mut s = Stream::new(session(12), StreamConfig::default());
+    s.set_pad_connected(0.0, 1, true);
+    drain(&mut s);
+    let (mut resends, mut t) = (0, 0.07);
+    while t < 6.0 {
+        s.tick(t);
+        resends += drain(&mut s).iter().filter(|p| p[0] & 0x0F == 0).count();
+        t += 0.15;
+    }
+    assert_eq!(resends, 15);
+
+    let mut s = Stream::new(session(12), StreamConfig::default());
+    s.request_idr(0.0);
+    drain(&mut s);
+    let (mut resends, mut t) = (0, 0.07);
+    while t < 6.0 {
+        s.tick(t);
+        resends += drain(&mut s).iter().filter(|p| p[0] & 0x0F == 0).count();
+        t += 0.15;
+    }
+    assert_eq!(resends, 3, "IDR retries are unchanged");
+}
+
+#[test]
 fn disconnect_sends_three_messages() {
     let mut s = Stream::new(session(12), StreamConfig::default());
     s.disconnect();
@@ -277,9 +304,84 @@ fn history_is_resent_every_100ms_and_sequences_increase() {
     assert!(drain(&mut s).is_empty());
     s.tick(0.11);
     let out = drain(&mut s);
-    assert_eq!(out.len(), 1);
-    let (kind, seq, hist) = decrypt_feedback(&mut c, &out[0], false);
+    assert_eq!(out.len(), 2, "the state packet is repeated too");
+    let (kind, _, _) = decrypt_feedback(&mut c, &out[0], false);
+    assert_eq!(kind, 6);
+    let (kind, seq, hist) = decrypt_feedback(&mut c, &out[1], false);
     assert_eq!((kind, seq, hist), (1, 1, vec![0x80, 0x89, 0xFF]));
+}
+
+#[test]
+fn lt_release_does_not_clear_or_stick_when_rt_is_pressed_first() {
+    let mut stream = Stream::new(session(12), StreamConfig::default());
+    let mut console = Console::new();
+    let mut state = ControllerState { r2: 1.0, ..Default::default() };
+
+    stream.update_pad(0.0, 0, &state);
+    drain(&mut stream);
+
+    state.l2 = 1.0;
+    stream.update_pad(0.01, 0, &state);
+    let out = drain(&mut stream);
+    let (_, _, both_pressed) = decrypt_feedback(&mut console, &out[0], false);
+    let (both_pressed, _) = both_pressed.as_chunks::<3>();
+    assert!(both_pressed.iter().any(|r| r[1] == 0x86 && r[2] == 0xFF));
+    assert!(both_pressed.iter().any(|r| r[1] == 0x87 && r[2] == 0xFF));
+
+    state.l2 = 0.0;
+    stream.update_pad(0.02, 0, &state);
+    let out = drain(&mut stream);
+    let (_, _, lt_released) = decrypt_feedback(&mut console, &out[0], false);
+    let (lt_released, _) = lt_released.as_chunks::<3>();
+    assert!(lt_released.iter().any(|r| r[1] == 0x86 && r[2] == 0));
+    assert!(lt_released.iter().any(|r| r[1] == 0x87 && r[2] == 0xFF));
+
+    state.r2 = 0.0;
+    stream.update_pad(0.03, 0, &state);
+    let out = drain(&mut stream);
+    let (_, _, both_released) = decrypt_feedback(&mut console, &out[0], false);
+    let (both_released, _) = both_released.as_chunks::<3>();
+    assert!(both_released.iter().any(|r| r[1] == 0x86 && r[2] == 0));
+    assert!(both_released.iter().any(|r| r[1] == 0x87 && r[2] == 0));
+}
+
+#[test]
+fn the_state_packet_is_repeated_while_idle_so_a_lost_one_cannot_stick_a_stick() {
+    let mut s = Stream::new(session(12), StreamConfig::default());
+    let st = ControllerState { right_x: 0.5, ..Default::default() };
+    s.update_pad(0.0, 0, &st);
+    drain(&mut s);
+    s.tick(0.05);
+    assert!(drain(&mut s).is_empty());
+    s.tick(0.11);
+    assert_eq!(drain(&mut s).len(), 1);
+    s.tick(0.15);
+    assert!(drain(&mut s).is_empty(), "then every 100 ms, not every tick");
+}
+
+#[test]
+fn lt_and_rt_changing_together_are_sent_as_one_history_packet_each() {
+    // Reproduces the burnout bug: both triggers change in the same controller sample (macOS reports the whole pad at once). The
+    // console applies one new event per packet, so a single batched packet left LT or RT unapplied (a stuck LT after release).
+    let mut stream = Stream::new(session(12), StreamConfig::default());
+    let mut console = Console::new();
+    let both = ControllerState { l2: 1.0, r2: 1.0, ..Default::default() };
+    stream.update_pad(0.0, 0, &both);
+    let out = drain(&mut stream);
+    assert_eq!(out.len(), 2, "one history packet per trigger");
+    let (k0, seq0, first) = decrypt_feedback(&mut console, &out[0], false);
+    let (k1, seq1, second) = decrypt_feedback(&mut console, &out[1], false);
+    assert_eq!((k0, k1, seq1), (1, 1, seq0 + 1), "consecutive history sequences");
+    assert_eq!(first, vec![0x80, 0x86, 0xFF], "LT alone");
+    assert_eq!(second, vec![0x80, 0x87, 0xFF, 0x80, 0x86, 0xFF], "RT in front, LT behind it");
+
+    stream.update_pad(0.02, 0, &ControllerState::default());
+    let out = drain(&mut stream);
+    assert_eq!(out.len(), 2, "each release is its own packet");
+    let (_, _, lt_release) = decrypt_feedback(&mut console, &out[0], false);
+    let (_, _, rt_release) = decrypt_feedback(&mut console, &out[1], false);
+    assert_eq!(&lt_release[..3], &[0x80, 0x86, 0x00], "the LT release can no longer be dropped behind the RT release");
+    assert_eq!(&rt_release[..3], &[0x80, 0x87, 0x00]);
 }
 
 #[test]

@@ -394,6 +394,17 @@ dialog::backdrop { background: rgba(3, 6, 14, .62); backdrop-filter: blur(6px); 
 .keys > div { display: flex; gap: 1rem; align-items: baseline; }
 .keys dt { min-width: 10rem; margin: 0; }
 .keys dd { margin: 0; color: var(--muted); }
+.controller-setting { margin-top: 1.25rem; }
+.controller-list { display: grid; gap: .5rem; list-style: none; margin: 0; padding: 0; }
+.controller-item { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: .65rem .8rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.controller-name { font-weight: 600; overflow-wrap: anywhere; }
+.controller-meta, .controller-empty { color: var(--muted); font-size: .875rem; }
+.controller-meta { text-align: right; }
+.controller-empty { padding: .25rem 0; }
+@media (max-width: 520px) {
+  .controller-item { align-items: flex-start; flex-direction: column; gap: .15rem; }
+  .controller-meta { text-align: left; }
+}
 kbd { font: 600 .8rem ui-monospace, SFMono-Regular, Menlo, monospace; padding: .1rem .45rem; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); }
 
 ul.plain { list-style: none; margin: .75rem 0 0; padding: 0; display: grid; gap: .5rem; }

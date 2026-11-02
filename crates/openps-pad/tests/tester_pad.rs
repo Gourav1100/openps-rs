@@ -6,6 +6,17 @@ fn st() -> ControllerState {
     ControllerState::default()
 }
 
+fn history_records(history: &[u8]) -> Vec<&[u8]> {
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset < history.len() {
+        let len = if history[offset] & 0xE0 == 0xC0 { 5 } else { 3 };
+        records.push(&history[offset..offset + len]);
+        offset += len;
+    }
+    records
+}
+
 #[test]
 fn non_finite_and_out_of_range_floats_encode_to_valid_bytes() {
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300, 5e-324] {
@@ -84,6 +95,190 @@ fn every_button_has_a_distinct_bit_and_record_and_press_release_pair() {
     // multi-bit masks are not a button
     assert_eq!(button_record(CROSS | CIRCLE, true), None);
     assert_eq!(button_record(0, true), None);
+}
+
+#[test]
+fn releasing_lt_after_rt_then_lt_keeps_each_trigger_independent() {
+    let mut pad = PadFeedback::new(0);
+    let mut state = st();
+
+    state.r2 = 1.0;
+    pad.update(&state, 0.0);
+    state.l2 = 1.0;
+    pad.update(&state, 0.01);
+    state.l2 = 0.0;
+    pad.update(&state, 0.02);
+
+    let bytes = pad.history_payload(0.02);
+    let history = history_records(&bytes);
+    assert!(history.iter().any(|r| r[1] == 0x86 && r[2] == 0), "LT release must be present: {history:?}");
+    assert!(history.iter().any(|r| r[1] == 0x87 && r[2] == 0xFF), "held RT must remain active: {history:?}");
+
+    state.r2 = 0.0;
+    pad.update(&state, 0.03);
+    let bytes = pad.history_payload(0.03);
+    let history = history_records(&bytes);
+    assert!(history.iter().any(|r| r[1] == 0x86 && r[2] == 0), "released LT must remain neutral");
+    assert!(history.iter().any(|r| r[1] == 0x87 && r[2] == 0), "RT release must be present: {history:?}");
+}
+
+#[test]
+fn every_event_gets_its_own_history_packet_oldest_first() {
+    // The console applies only ONE new event per history packet (chiaki-ng 4382c1c7: "simultaneous L2 and R2 presses registered as
+    // R2 only"), and the original app offers a packet per event. So LT and RT changing together must be two packets, the second
+    // carrying the first behind it.
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.l2 = 1.0;
+    s.r2 = 1.0;
+    p.update(&s, 0.0);
+    assert_eq!(
+        p.take_history_packets(0.0),
+        vec![vec![0x80, 0x86, 0xFF], vec![0x80, 0x87, 0xFF, 0x80, 0x86, 0xFF]],
+        "LT first, then RT with LT behind it"
+    );
+    assert!(p.take_history_packets(0.0).is_empty(), "taken once");
+    assert_eq!(
+        p.history_payload(0.0),
+        vec![0x80, 0x87, 0xFF, 0x80, 0x86, 0xFF],
+        "the idle repeat still sends the whole window"
+    );
+}
+
+#[test]
+fn buttons_then_triggers_are_each_a_packet_and_a_single_event_is_a_single_packet() {
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.buttons.insert(Button::CROSS);
+    s.l2 = 1.0;
+    p.update(&s, 0.0);
+    let packets = p.take_history_packets(0.0);
+    assert_eq!(packets.len(), 2);
+    assert_eq!(packets[0], vec![0x80, 0x88, 0xFF], "CROSS");
+    assert_eq!(packets[1], vec![0x80, 0x86, 0xFF, 0x80, 0x88, 0xFF], "then LT, with CROSS behind it");
+
+    s.l2 = 0.0;
+    p.update(&s, 0.1);
+    assert_eq!(p.take_history_packets(0.1).len(), 1, "one event, one packet");
+}
+
+#[test]
+fn releasing_both_triggers_together_sends_each_release_in_its_own_packet() {
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.l2 = 1.0;
+    s.r2 = 1.0;
+    p.update(&s, 0.0);
+    p.take_history_packets(0.0);
+    s.l2 = 0.0;
+    s.r2 = 0.0;
+    p.update(&s, 0.1);
+    let packets = p.take_history_packets(0.1);
+    assert_eq!(packets.len(), 2);
+    assert_eq!(&packets[0][..3], &[0x80, 0x86, 0x00], "the LT release is a packet of its own, so it cannot be dropped");
+    assert_eq!(&packets[1][..3], &[0x80, 0x87, 0x00]);
+}
+
+#[test]
+fn a_touchpad_click_is_never_held_without_its_finger() {
+    // chiaki-ng (698e0ec8, 4382c1c7): when a click and its finger change together, releases go first, then touch, then presses, so
+    // the click is pressed after the finger lands and released before the finger lifts.
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.buttons.insert(Button::TOUCHPAD);
+    s.touch = Some((0.5, 0.5));
+    p.update(&s, 0.0);
+    let down = p.take_history_packets(0.0);
+    assert_eq!(down.len(), 2);
+    assert_eq!(down[0][0] & 0xF0, 0xD0, "the finger lands first: {:02x?}", down[0]);
+    assert_eq!(&down[1][..3], &[0x80, 0xB1, 0x00], "then the click is pressed");
+
+    s.buttons.clear();
+    s.touch = None;
+    p.update(&s, 0.1);
+    let up = p.take_history_packets(0.1);
+    assert_eq!(up.len(), 2);
+    assert_eq!(&up[0][..3], &[0x80, 0x91, 0x00], "the click is released first");
+    assert_eq!(up[1][0] & 0xF0, 0xC0, "then the finger lifts: {:02x?}", up[1]);
+}
+
+#[test]
+fn releases_come_before_presses_in_one_update() {
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.buttons.insert(Button::CIRCLE);
+    p.update(&s, 0.0);
+    p.take_history_packets(0.0);
+    s.buttons.remove(&Button::CIRCLE);
+    s.buttons.insert(Button::CROSS); // the earlier bit is the press, so bit order alone would put it first
+    s.l2 = 1.0;
+    p.update(&s, 0.1);
+    let newest: Vec<[u8; 3]> = p.take_history_packets(0.1).iter().map(|pk| [pk[0], pk[1], pk[2]]).collect();
+    assert_eq!(
+        newest,
+        vec![[0x80, 0x89, 0x00], [0x80, 0x88, 0xFF], [0x80, 0x86, 0xFF]],
+        "CIRCLE release, CROSS press, then LT"
+    );
+}
+
+#[test]
+fn idle_sensors_encode_to_the_initial_state_bytes() {
+    // The values handed to the console when a pad goes away must equal a fresh pad's neutral motion bytes.
+    let fresh = PadFeedback::new(0).state_payload(12);
+    let mut p = PadFeedback::new(0);
+    p.set_sensors([0.0; 3], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(p.state_payload(12)[1..17], fresh[1..17]);
+}
+
+#[test]
+fn unsent_packets_are_bounded_when_nobody_takes_them() {
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    for i in 0..5000u32 {
+        s.l2 = f64::from(i % 255) / 255.0;
+        p.update(&s, 0.0);
+    }
+    assert!(p.take_history_packets(0.0).len() <= 64);
+}
+
+#[test]
+fn history_only_ever_gains_records_at_the_front_like_the_original_app() {
+    // The original app (RemoteViewModel) does `remove(19)` then `addFirst` for every change and never touches an older record, so
+    // each packet is the new record followed by the whole previous packet. 99% of the history packets in a recorded LT+RT session
+    // were not, because older records of the same control were being removed.
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    let mut before = p.history_payload(0.0);
+    for step in 0..60u32 {
+        match step % 4 {
+            0 => s.r2 = f64::from(step + 1) / 255.0,
+            1 => s.l2 = f64::from(step + 1) / 255.0,
+            2 => {
+                s.buttons.insert(Button::CROSS);
+            }
+            _ => {
+                s.buttons.remove(&Button::CROSS);
+            }
+        }
+        p.update(&s, f64::from(step));
+        let after = p.history_payload(f64::from(step));
+        let (prev, now) = (history_records(&before), history_records(&after));
+        assert_eq!(now.len(), (prev.len() + 1).min(MAX_HISTORY), "step {step}");
+        assert_eq!(now[1..], prev[..now.len() - 1], "step {step}: older records must be left exactly as they were");
+        before = after;
+    }
+}
+
+#[test]
+fn a_trigger_ramp_keeps_every_step_newest_first() {
+    // RT 0x1a -> 0x40 -> 0x77 from a real trace: the earlier values stay in the list behind the newest one.
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    for v in [0x1a, 0x40, 0x77] {
+        s.r2 = f64::from(v) / 255.0;
+        p.update(&s, 0.0);
+    }
+    assert_eq!(p.history_payload(0.0), vec![0x80, 0x87, 0x77, 0x80, 0x87, 0x40, 0x80, 0x87, 0x1a]);
 }
 
 #[test]

@@ -10,6 +10,8 @@ use std::collections::VecDeque;
 
 pub const MAX_HISTORY: usize = 20;
 pub const IDLE_RESEND_S: f64 = 0.1;
+/// Packets built by `update` but not yet taken; a caller that never takes them cannot grow this without bound.
+const MAX_PENDING_PACKETS: usize = 64;
 /// Touch surface size the app uses to scale normalised coordinates (`RemoteTouchState`).
 pub const TOUCH_W: f64 = 1920.0;
 pub const TOUCH_H: f64 = 943.0;
@@ -164,6 +166,8 @@ pub struct PadFeedback {
     pad: u8,
     state: [u8; 28],
     history: VecDeque<Vec<u8>>,
+    /// One snapshot of the history window per event `update` recorded, oldest first (see `take_history_packets`).
+    pending: VecDeque<Vec<u8>>,
     prev_mask: u32,
     prev_l2: u8,
     prev_r2: u8,
@@ -194,6 +198,7 @@ impl PadFeedback {
             pad,
             state,
             history: VecDeque::new(),
+            pending: VecDeque::new(),
             prev_mask: 0,
             prev_l2: 0,
             prev_r2: 0,
@@ -217,6 +222,28 @@ impl PadFeedback {
         self.history_dirty = true;
     }
 
+    /// The console applies only one new event per history packet, so every event `update` records gets a packet of its own: the
+    /// window as it stands right after that event. (The original app offers a packet per event; chiaki-ng fixed the same bug,
+    /// "simultaneous L2 and R2 presses registered as R2 only".)
+    fn emit(&mut self) {
+        if self.pending.len() >= MAX_PENDING_PACKETS {
+            self.pending.pop_front();
+        }
+        let packet = self.window();
+        self.pending.push_back(packet);
+    }
+
+    /// The history window, newest first, each record stamped for this pad.
+    fn window(&self) -> Vec<u8> {
+        let mut out = vec![];
+        for rec in &self.history {
+            let mut r = rec.clone();
+            r[0] = stamp(r[0], self.pad);
+            out.extend(r);
+        }
+        out
+    }
+
     /// Announce a pad joining/leaving (queued like any other history event).
     pub fn presence(&mut self, connected: bool) {
         self.push(presence_record(self.pad, connected).to_vec());
@@ -234,6 +261,19 @@ impl PadFeedback {
         self.state_dirty = true;
     }
 
+    /// Records the digital button edges in `diff`: the presses when `pressed`, the releases otherwise.
+    fn button_edges(&mut self, diff: u32, mask: u32, pressed: bool, u: &mut Update) {
+        for bit in [CROSS, CIRCLE, SQUARE, TRIANGLE, DL, DR, DU, DD, L1, R1, L3, R3, OPTIONS, SHARE, TOUCHPAD, PS] {
+            if diff & bit != 0 && (mask & bit != 0) == pressed {
+                if let Some(r) = button_record(bit, pressed) {
+                    self.push(r.to_vec());
+                    self.emit();
+                    u.history_changed = true;
+                }
+            }
+        }
+    }
+
     /// Feed the newest pad state; button/trigger/touch edges become history events, sticks update the state payload.
     pub fn update(&mut self, st: &ControllerState, now: f64) -> Update {
         let mut u = Update::default();
@@ -248,31 +288,12 @@ impl PadFeedback {
             u.state_changed = true;
         }
 
-        // digital buttons: one record per edge
+        // One record per edge, in the order chiaki-ng settled on for real consoles: button releases, then touch, then button
+        // presses, then the triggers. A touchpad click is therefore never held without its finger (the finger lands before the click
+        // is pressed and the click is released before the finger lifts).
         let mask = button_mask(st);
         let diff = mask ^ self.prev_mask;
-        for bit in [CROSS, CIRCLE, SQUARE, TRIANGLE, DL, DR, DU, DD, L1, R1, L3, R3, OPTIONS, SHARE, TOUCHPAD, PS] {
-            if diff & bit != 0 {
-                if let Some(r) = button_record(bit, mask & bit != 0) {
-                    self.push(r.to_vec());
-                    u.history_changed = true;
-                }
-            }
-        }
-        self.prev_mask = mask;
-
-        // analog triggers: record on every change of the 8-bit value
-        let (l2, r2) = ((st.l2.clamp(0.0, 1.0) * 255.0).round() as u8, (st.r2.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if l2 != self.prev_l2 {
-            self.push(trigger_record(false, l2).to_vec());
-            self.prev_l2 = l2;
-            u.history_changed = true;
-        }
-        if r2 != self.prev_r2 {
-            self.push(trigger_record(true, r2).to_vec());
-            self.prev_r2 = r2;
-            u.history_changed = true;
-        }
+        self.button_edges(diff, mask, false, &mut u);
 
         // touch: down/move records while a finger is on the pad, one up record when it lifts
         let cur = st.touch.map(|(x, y)| ((x * TOUCH_W) as i32, (y * TOUCH_H) as i32));
@@ -283,13 +304,33 @@ impl PadFeedback {
                         self.touch_counter = (self.touch_counter + 1) & 0x7F;
                     } // new finger-down
                     self.push(touch_record(x, y, self.touch_counter, true).to_vec());
+                    self.emit();
                 }
                 None => {
                     let (x, y) = self.touch_prev.unwrap();
                     self.push(touch_record(x, y, self.touch_counter, false).to_vec());
+                    self.emit();
                 }
             }
             self.touch_prev = cur;
+            u.history_changed = true;
+        }
+
+        self.button_edges(diff, mask, true, &mut u);
+        self.prev_mask = mask;
+
+        // analog triggers: record on every change of the 8-bit value
+        let (l2, r2) = ((st.l2.clamp(0.0, 1.0) * 255.0).round() as u8, (st.r2.clamp(0.0, 1.0) * 255.0).round() as u8);
+        if l2 != self.prev_l2 {
+            self.push(trigger_record(false, l2).to_vec());
+            self.emit();
+            self.prev_l2 = l2;
+            u.history_changed = true;
+        }
+        if r2 != self.prev_r2 {
+            self.push(trigger_record(true, r2).to_vec());
+            self.emit();
+            self.prev_r2 = r2;
             u.history_changed = true;
         }
         let _ = now;
@@ -310,13 +351,15 @@ impl PadFeedback {
     pub fn history_payload(&mut self, now: f64) -> Vec<u8> {
         self.history_dirty = false;
         self.last_history_send = now;
-        let mut out = vec![];
-        for rec in &self.history {
-            let mut r = rec.clone();
-            r[0] = stamp(r[0], self.pad);
-            out.extend(r);
-        }
-        out
+        self.window()
+    }
+
+    /// The history packets for the events `update` recorded since the last call, oldest first: one per event, each the window
+    /// right after that event. Send them in this order.
+    pub fn take_history_packets(&mut self, now: f64) -> Vec<Vec<u8>> {
+        self.history_dirty = false;
+        self.last_history_send = now;
+        self.pending.drain(..).collect()
     }
 
     /// True when a new event is waiting, or (with history present) 100 ms passed since the last send so loss self-heals.

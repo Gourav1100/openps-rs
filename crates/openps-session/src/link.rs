@@ -27,7 +27,7 @@ pub struct Link {
 pub const RCVBUF_BYTES: usize = 524_288;
 const MAX_DATAGRAM: usize = 65_535;
 
-struct UdpSink(UdpSocket);
+struct UdpSink(UdpSocket, u64);
 struct UdpSource {
     socket: UdpSocket,
     buf: Vec<u8>,
@@ -58,8 +58,15 @@ impl PacketSink for UdpSink {
     fn send(&mut self, data: &[u8]) -> io::Result<()> {
         match self.0.send(data) {
             Ok(_) => Ok(()),
-            // UDP is lossy by contract: the protocol layers retransmit what matters
-            Err(e) if is_transient(&e) => Ok(()),
+            // UDP is lossy by contract: the protocol layers retransmit what matters. It is still worth knowing when a datagram never
+            // left (a lost button release looks exactly like a delivered one otherwise), so say so, without flooding.
+            Err(e) if is_transient(&e) => {
+                self.1 += 1;
+                if self.1 <= 3 || self.1.is_multiple_of(100) {
+                    log::warn!("udp datagram not sent ({e}), {} dropped so far", self.1);
+                }
+                Ok(())
+            }
             Err(e) => Err(e),
         }
     }
@@ -89,7 +96,7 @@ pub fn udp_link(remote: SocketAddr) -> io::Result<Link> {
     let socket: UdpSocket = socket.into();
     let source = socket.try_clone()?;
     Ok(Link {
-        sink: Box::new(UdpSink(socket)),
+        sink: Box::new(UdpSink(socket, 0)),
         source: Box::new(UdpSource { socket: source, buf: vec![0; MAX_DATAGRAM] }),
     })
 }

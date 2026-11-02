@@ -19,6 +19,8 @@ mod gamemaps;
 #[cfg(target_os = "macos")]
 mod input;
 mod library;
+#[cfg(target_os = "macos")]
+mod pads;
 mod paths;
 #[cfg(feature = "demo")]
 mod qa;
@@ -217,7 +219,7 @@ fn media_and_events(app: &AppHandle, look: openps_metal::look::SharedLook, setti
                 Ok(v) => {
                     let v = Arc::new(v);
                     return MediaParts {
-                        media: v.media.clone(),
+                        media: Arc::new(pads::WithPads(v.media.clone())),
                         events: v.follow_session(app.clone(), plain),
                         audio: Some(v.audio.clone()),
                         video: Some(v),
@@ -708,6 +710,10 @@ pub fn run() {
             input::input_config_reveal,
             #[cfg(target_os = "macos")]
             input::input_config_reset,
+            #[cfg(target_os = "macos")]
+            pads::controller_status,
+            #[cfg(target_os = "macos")]
+            pads::controller_set_deadzone,
             get_settings,
             render_stats,
             input::input_profiles,
@@ -786,17 +792,19 @@ pub fn run() {
                 let _ = std::fs::OpenOptions::new().append(true).create(true).mode(0o600).open(&file);
                 let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
             }
-            app.handle().plugin(
-                tauri_plugin_log::Builder::default()
-                    .clear_targets()
-                    .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
-                        path: dir.join("logs"),
-                        file_name: Some("openps".into()),
-                    }))
-                    .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout))
-                    .level(log::LevelFilter::Info)
-                    .build(),
-            )?;
+            let mut log = tauri_plugin_log::Builder::default()
+                .clear_targets()
+                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                    path: dir.join("logs"),
+                    file_name: Some("openps".into()),
+                }))
+                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout))
+                .level(log::LevelFilter::Info);
+            if openps_input::trace::enabled() {
+                // the default (40 KB, keep one) would rotate the start of a reproduction away within seconds
+                log = log.max_file_size(100_000_000).rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll);
+            }
+            app.handle().plugin(log.build())?;
             // `incognito`: the web view keeps no cookies, cache or local storage on disk.
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("OpenPS")
@@ -808,7 +816,10 @@ pub fn run() {
             app.manage(DataDir(dir.clone()));
             let look = openps_metal::look::SharedLook::new(); // what we told the console the stick does; the renderer reads it
             #[cfg(target_os = "macos")]
-            app.manage(input::InputState::new(&dir, look.clone()));
+            {
+                app.manage(input::InputState::new(&dir, look.clone()));
+                app.manage(pads::PadState::new(look.clone()));
+            }
             let core = build_core(app.handle(), dir, look).map_err(|e| format!("cannot start: {e}"))?;
             app.manage(core);
             // The input hub ignores input until it is told the window is focused: the window may already be key now, and then no
@@ -816,7 +827,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Some(w) = app.get_webview_window("main") {
                 input::set_focus(app.handle(), w.is_focused().unwrap_or(false));
+                pads::set_focus(app.handle(), w.is_focused().unwrap_or(false));
             }
+            #[cfg(target_os = "macos")]
+            pads::init(app.handle());
             // Window events can arrive before a full-screen transition has finished, so the renderer's idea of "full screen" (and of the
             // display's refresh rate) is also re-read twice a second. Cheap, and it always converges. The timer thread only posts
             // to the main thread: NSWindow and NSScreen may be used from there only.
@@ -876,7 +890,10 @@ pub fn run() {
                     }
                 }
                 #[cfg(target_os = "macos")]
-                tauri::WindowEvent::Focused(f) => input::set_focus(window.app_handle(), *f),
+                tauri::WindowEvent::Focused(f) => {
+                    input::set_focus(window.app_handle(), *f);
+                    pads::set_focus(window.app_handle(), *f);
+                }
                 #[cfg(target_os = "macos")]
                 tauri::WindowEvent::Moved(_)
                 | tauri::WindowEvent::Resized(_)

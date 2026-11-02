@@ -11,6 +11,7 @@ openps-fec = { path = "../openps-fec" }
 openps-takion = { path = "../openps-takion" }
 openps-pad = { path = "../openps-pad" }
 openps-input = { path = "../openps-input" }
+log = "0.4"
 
 [dev-dependencies]
 openps-testkit = { path = "../openps-testkit" }

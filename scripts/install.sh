@@ -87,4 +87,5 @@ codesign --force --deep --sign - "$app" >/dev/null 2>&1 || echo "note: ad-hoc si
 echo
 echo "Installed: $app"
 echo "Run:       open \"$app\""
+echo "Pad debug: OPENPS_INPUT_TRACE=1 \"$app/Contents/MacOS/openps-app\"   (see docs/USAGE.md, Controller input diagnostics)"
 echo "Remove:    scripts/uninstall.sh --dest \"$dest\""

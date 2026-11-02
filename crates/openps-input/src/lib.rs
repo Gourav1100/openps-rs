@@ -8,6 +8,7 @@ pub mod mapping;
 pub mod overlay;
 pub mod state;
 pub mod textinput;
+pub mod trace;
 
 pub use config::{load_defaults, load_layers, Config};
 pub use mapping::{InputSnapshot, Mapper};

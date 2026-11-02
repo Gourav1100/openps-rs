@@ -1,5 +1,6 @@
 use crate::link::{Link, PacketSink, PacketSource};
 use crate::{Command, ConnectParams, Handle, Msg, NetworkInfo, NetworkTest, Notice, Shared};
+use openps_input::trace;
 use openps_stream::{Event, Stream};
 use openps_takion::handshake::{Handshake, Session};
 use openps_takion::senkusha::{Senkusha, State as SenkushaState};
@@ -357,9 +358,38 @@ impl Runner {
     }
 
     fn flush(&mut self, stream: &mut Stream) -> Result<(), String> {
+        let t20 = stream.takion_version() >= 20;
         let packets: Vec<Vec<u8>> = std::iter::from_fn(|| stream.poll_transmit()).collect();
-        self.send_all(packets.into_iter())
+        for p in packets {
+            let sent = self.sink.send(&p);
+            if trace::enabled() {
+                if let Some((seq, key_pos)) = history_ids(&p, t20) {
+                    if stream.take_traced_history(seq) {
+                        log::info!(
+                            "input_trace t={} stage=udp_send kind=history seq={seq} key_pos={key_pos} len={} result={}",
+                            trace::now_us(),
+                            p.len(),
+                            sent.as_ref().map_or_else(|e| format!("error: {e}"), |()| "handed_to_socket".to_string())
+                        );
+                    }
+                }
+            }
+            sent.map_err(|e| format!("send failed: {e}"))?;
+            self.shared.datagrams_out.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
     }
+}
+
+/// (sequence, keyPos) of a FEEDBACK_HISTORY packet (type 1), read from the offsets the stream writes them to.
+fn history_ids(p: &[u8], t20: bool) -> Option<(u16, u32)> {
+    let (seq_off, kp_off) = if t20 { (9, 12) } else { (1, 4) };
+    if p.first().map(|b| b & 0x0F) != Some(1) || p.len() < kp_off + 4 {
+        return None;
+    }
+    let seq = u16::from_be_bytes([p[seq_off], p[seq_off + 1]]);
+    let key_pos = u32::from_be_bytes([p[kp_off], p[kp_off + 1], p[kp_off + 2], p[kp_off + 3]]);
+    Some((seq, key_pos))
 }
 
 const MIN_IDLE_S: f64 = 0.1;
@@ -371,6 +401,35 @@ fn sane_idle_timeout(v: f64) -> f64 {
         10.0
     } else {
         v.max(MIN_IDLE_S)
+    }
+}
+
+#[cfg(test)]
+mod history_id_tests {
+    use super::history_ids;
+
+    #[test]
+    fn history_packets_are_identified_by_sequence_and_key_pos_in_both_layouts() {
+        let mut legacy = vec![0u8; 12 + 3];
+        legacy[0] = 1;
+        legacy[1..3].copy_from_slice(&0x1234u16.to_be_bytes());
+        legacy[4..8].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+        assert_eq!(history_ids(&legacy, false), Some((0x1234, 0xDEAD_BEEF)));
+
+        let mut t20 = vec![0u8; 20 + 3];
+        t20[0] = 1;
+        t20[9..11].copy_from_slice(&0x4321u16.to_be_bytes());
+        t20[12..16].copy_from_slice(&0x0102_0304u32.to_be_bytes());
+        assert_eq!(history_ids(&t20, true), Some((0x4321, 0x0102_0304)));
+    }
+
+    #[test]
+    fn only_history_packets_are_identified() {
+        let mut state = vec![0u8; 40];
+        state[0] = 6; // FEEDBACK (state), not history
+        assert_eq!(history_ids(&state, true), None);
+        assert_eq!(history_ids(&[1, 0, 0], false), None, "too short to hold a keyPos");
+        assert_eq!(history_ids(&[], true), None);
     }
 }
 

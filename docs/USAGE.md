@@ -49,9 +49,15 @@ When you are signed in to PlayStation Network, the Consoles page shows a trophy 
 * If the console says it is **still closing an earlier session**, the connect screen stays up ("Closing the previous session…") and reconnects by itself, for up to a minute and a half. **Cancel** stops it.
 * The list needs the PlayStation Network connection (*Settings → PlayStation Network*). Games the console has installed but your account never played have no poster (a coloured tile is shown).
 
-### Keyboard and mouse
+### Controller, keyboard and mouse
 
-Keyboard and mouse control is **off** when a stream starts, so the mouse stays yours. Press **F10** (or click the toggle) to turn it on: the pointer is hidden and held in the middle of the window, the mouse drives the right stick, and no key or click reaches anything but the game. Press **F10** again to give the mouse back. Mapping also stops by itself when the window loses focus.
+When a supported DualSense or DualShock 4 is connected, it controls the game by default. In the stream bar, **Controls** shows the current mode; click it or press **F10** to switch between the controller and keyboard and mouse. Switching modes releases the previous input source.
+
+Open **Settings → Controls** to see connected controllers, their type, slot and battery status, and adjust the stick deadzone. The deadzone ignores small movements around the stick centre and applies immediately.
+
+Console rumble and lightbar feedback are forwarded to DualSense controllers, with adaptive-trigger effects supported by the DualSense HID path. Bluetooth voice-coil PCM haptics are implemented experimentally but have not yet been verified on hardware; USB PCM haptics are not implemented because they use the controller's separate USB audio path.
+
+Keyboard and mouse mapping is **off** when a stream starts, so the mouse stays yours unless you switch to it. When enabled, the pointer is hidden and held in the middle of the window, the mouse drives the right stick, and no key or click reaches anything but the game. Mapping also stops by itself when the window loses focus.
 
 | Key | Action |
 |---|---|
@@ -147,6 +153,16 @@ Display (applies immediately, also while streaming):
 | No sound | HUD shows "No sound" if audio could not start; check the output device and the volume setting. |
 
 Logs: `openps-data/logs/openps.log` (inside the app). They hold no keys, PINs or tokens. Nothing is sent anywhere.
+
+### Controller input diagnostics
+
+If a physical controller seems to send the wrong thing, start the app from a terminal with tracing on (a double-click launch cannot pass the variable):
+
+```sh
+OPENPS_INPUT_TRACE=1 ./install/OpenPS.app/Contents/MacOS/openps-app
+```
+
+Every pad change is then logged with a microsecond clock (`t=`) at each stage: `source_emit` (what macOS reported), `arbiter` (stored state, and whether it was forwarded), `feedback_encode`, `wire_protect` (one line per history packet: its sequence, key position and records; a change that moves several controls at once is sent as one packet per control, because the console applies only one new event per packet; trigger records are `86` for LT and `87` for RT, last byte the value) and `udp_send` (whether the socket accepted that same packet). While tracing, the log file is not rotated, so it grows; delete it afterwards. Packets the socket refuses for transient reasons are logged as warnings even without tracing. A `udp_send` line proves the packet left the Mac, not that the console applied it.
 
 ## 6. Uninstall
 
