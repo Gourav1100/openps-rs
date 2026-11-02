@@ -55,9 +55,9 @@ When a supported DualSense or DualShock 4 is connected, it controls the game by 
 
 Open **Settings → Controls** to see connected controllers, their type, slot and battery status, and adjust the stick deadzone. The deadzone ignores small movements around the stick centre and applies immediately.
 
-Console rumble and lightbar feedback are forwarded to DualSense controllers, with adaptive-trigger effects supported by the DualSense HID path. Bluetooth voice-coil PCM haptics are implemented experimentally but have not yet been verified on hardware; USB PCM haptics are not implemented because they use the controller's separate USB audio path.
+Console rumble and lightbar feedback are forwarded to DualSense controllers, with adaptive-trigger effects supported by the DualSense HID path. Bluetooth voice-coil PCM haptics are implemented experimentally but have not yet been verified on hardware; USB PCM haptics are not played as voice-coil haptics because they use the controller's separate USB audio path; instead the haptic audio is turned into rumble on both motors (it follows the vibration setting, and stops within 150 ms of the audio ending).
 
-**Vibration strength** follows the console's own setting (PS5 *Settings → Accessories → Controllers → Vibration Intensity*): Strong is full strength, Medium half, Weak about a third, Off none. Until the console reports a setting the controller vibrates at full strength. The adaptive-trigger intensity setting is not applied yet.
+**Vibration strength** follows the console's own setting (PS5 *Settings → Accessories → Controllers → Vibration Intensity*): Strong is full strength, Medium half, Weak about a third, Off none. Until the console reports a setting the controller vibrates at full strength. The adaptive-trigger setting is applied too: Medium and Weak soften the trigger effects, Off releases them.
 
 **Several buttons at once.** The console applies only one new input event per packet, so when a change moves several controls together (for example LT and RT pressed in the same instant), each control is sent in a packet of its own, oldest first. This is what keeps a trigger from being missed or left held when two are pressed or released together.
 

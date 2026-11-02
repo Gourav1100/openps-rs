@@ -18,6 +18,10 @@ The controller path has been run against a real PS5.
   with a microsecond clock. See "Controller input diagnostics" in `docs/USAGE.md`. It is off by default; while it is on,
   the log file is not rotated.
 - A warning in the log when the network refuses to send a packet (previously silent).
+- A second touchpad finger is sent to the console, with its own touch id.
+- Adaptive-trigger intensity follows the console setting (Medium, Weak, Off).
+- A DualSense over USB now rumbles with the game's haptic audio (the rumble stops within 150 ms of the audio ending).
+- Returning to the app re-reads the controllers, so a button released while it was in the background cannot stay held.
 - `scripts/install.sh` prints the trace launch command, and `scripts/make-dmg.sh` builds a disk image.
 
 ### Fixed
@@ -34,13 +38,15 @@ The controller path has been run against a real PS5.
   packet no longer leaves it ignored.
 - Unplugging a controller, losing focus, or switching to the keyboard resets its motion sensors as well as its sticks
   and buttons, so the console no longer keeps seeing the last tilt.
+- A controller that cannot be opened for feedback is retried once a second instead of on every write, which had flooded
+  the log and used CPU.
 - Vibration strength follows the console setting: Strong is full strength, Medium half, Weak about a third, Off none.
   Until the console reports a setting the controller vibrates at full strength.
 
 ### Known limitations
 
-- The adaptive-trigger intensity setting and a second touch finger are not sent to the console yet.
-- Bluetooth voice-coil haptics have not been verified on hardware; USB haptics are not implemented.
+- The adaptive-trigger intensity and USB haptic-to-rumble behavior have not been verified on hardware.
+- Bluetooth voice-coil haptics have not been verified on hardware; true voice-coil haptics over USB are not implemented.
 - A DualShock 4 gets input but no rumble or lightbar output.
 - PSN-based internet registration is experimental and has **not been tested against Sony's servers**.
 
@@ -69,10 +75,3 @@ Tauri. This release establishes the complete application and streaming stack.
 
 - macOS 13 or later on Apple silicon or Intel.
 
-### Known limitations
-
-- This pre-release had **not been tested with a real PlayStation console**.
-- PSN-based internet registration is experimental and has **not been tested
-  against Sony's servers**.
-- Compatibility and behavior may differ on real consoles and networks; treat
-  this build as one for validation, not as a verified release.
