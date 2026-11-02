@@ -20,6 +20,8 @@ pub struct OutState {
     pub left_trigger: Option<[u8; 11]>,
     /// Console intensity levels (haptic, adaptive trigger), each 0..=3.
     pub intensity: Option<(u8, u8)>,
+    /// Rumble made from the console's haptic audio (see `haptic_rumble`), on both motors; the stronger of this and `rumble` counts.
+    pub haptic_motor: u8,
 }
 
 impl OutState {
@@ -45,6 +47,7 @@ impl OutState {
             right_trigger: Some([0; 11]),
             left_trigger: Some([0; 11]),
             intensity: self.intensity,
+            haptic_motor: 0,
         }
     }
 }
@@ -77,21 +80,39 @@ fn trigger(kind: u8, params: &[u8; 10]) -> [u8; 11] {
 
 const COMMON: usize = 47;
 
+/// The pad's own power reduction for adaptive triggers, for the console's trigger-intensity level: high nibble of byte 36 (strong
+/// 0x00, medium 0x60, weak 0x90, off 0xF0), as chiaki-ng writes it. The low nibble is the vibration reduction, applied in software.
+fn trigger_reduction(level: u8) -> u8 {
+    match level {
+        0 => 0xF0,
+        2 => 0x60,
+        3 => 0x90,
+        _ => 0x00,
+    }
+}
+
 fn common(s: &OutState) -> [u8; COMMON] {
     let mut c = [0u8; COMMON];
     if let Some((left, right)) = s.rumble {
         let intensity = s.intensity.map_or(DEFAULT_INTENSITY, |(haptic, _)| haptic);
         c[0] |= 0x01 | 0x02; // compatible vibration + haptics select
-        c[2] = scale(right, intensity);
-        c[3] = scale(left, intensity);
+        c[2] = scale(right.max(s.haptic_motor), intensity);
+        c[3] = scale(left.max(s.haptic_motor), intensity);
     }
+    // With trigger intensity off the console's effects are released instead of played.
+    let triggers_off = s.intensity.is_some_and(|(_, trigger)| trigger == 0);
     if let Some(t) = s.right_trigger {
         c[0] |= 0x04;
-        c[10..21].copy_from_slice(&t);
+        c[10..21].copy_from_slice(&if triggers_off { [0; 11] } else { t });
     }
     if let Some(t) = s.left_trigger {
         c[0] |= 0x08;
-        c[21..32].copy_from_slice(&t);
+        c[21..32].copy_from_slice(&if triggers_off { [0; 11] } else { t });
+    }
+    // Once a level is known it is always written (strong too): the pad keeps its last reduction until told otherwise.
+    if let Some((_, trigger)) = s.intensity {
+        c[1] |= 0x40;
+        c[36] = trigger_reduction(trigger);
     }
     if let Some([r, g, b]) = s.led {
         c[1] |= 0x04; // lightbar control

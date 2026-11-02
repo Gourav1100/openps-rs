@@ -134,6 +134,14 @@ pub fn set_focus(app: &AppHandle, focused: bool) {
         apply(app, &cmds);
     }
     sync_quiet(app);
+    if focused {
+        // nothing was delivered while the app was in the background: read the pads again so a stale "held" is corrected at once
+        if let Some(st) = app.try_state::<PadState>() {
+            if let Some(source) = st._source.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                source.resnapshot();
+            }
+        }
+    }
 }
 
 #[tauri::command]

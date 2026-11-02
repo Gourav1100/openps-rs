@@ -158,3 +158,29 @@ fn the_idle_sensor_values_are_level_and_at_rest() {
     let s = Sensors::idle();
     assert_eq!((s.gyro, s.accel, s.orientation), ([0.0; 3], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]));
 }
+
+#[test]
+fn a_button_let_go_in_the_background_is_corrected_by_the_fresh_reading_on_refocus() {
+    // GameController delivers nothing while the app is in the background, so the arbiter still remembers the button as held and
+    // replays it on refocus. The pad is read again right then (MacPads::resnapshot), and that reading must undo the stale press.
+    let mut a = ready();
+    a.on_event(up(10, pressed()));
+    a.set_focused(false);
+    let back = a.set_focused(true);
+    assert_eq!(back, vec![PadCmd::State { slot: 0, state: pressed() }], "the stale press is replayed");
+    let fresh = a.on_event(up(10, ControllerState::default()));
+    assert_eq!(
+        fresh,
+        vec![PadCmd::State { slot: 0, state: ControllerState::default() }],
+        "the fresh reading releases it"
+    );
+}
+
+#[test]
+fn a_fresh_reading_that_matches_the_memory_sends_nothing() {
+    let mut a = ready();
+    a.on_event(up(10, pressed()));
+    a.set_focused(false);
+    a.set_focused(true);
+    assert!(a.on_event(up(10, pressed())).is_empty(), "still held: no duplicate");
+}

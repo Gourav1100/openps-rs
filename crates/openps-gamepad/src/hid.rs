@@ -1,16 +1,22 @@
 //! Writes output reports to DualSense pads on a thread of its own. The pad is opened shared, next to GameController (which keeps
 //! reading the input). Writes happen on change only; the newest request per pad wins.
 
+use crate::backoff::Backoff;
+use crate::haptic_rumble::HapticRumble;
 use crate::haptics::bluetooth_report;
 use crate::report::{build, Bus, OutState};
 use hidapi::{BusType, HidApi, HidDevice};
 use openps_stream::padblob::PadOutput;
 use std::collections::VecDeque;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
 
 const SONY: u16 = 0x054C;
 const DUALSENSE: u16 = 0x0CE6;
 const DUALSENSE_EDGE: u16 = 0x0DF2;
+/// After the pad cannot be found or opened, wait this long before looking again (a device-list refresh is expensive and every
+/// command, up to 100 haptic frames a second, would otherwise repeat it and its warning).
+const RETRY_AFTER: Duration = Duration::from_secs(1);
 
 enum Cmd {
     Apply(usize, PadOutput),
@@ -36,8 +42,10 @@ struct Slot {
     haptic_counter: u8,
     dirty: bool,
     haptics: VecDeque<[u8; 120]>,
-    warned_usb_haptics: bool,
+    /// USB only: the console's haptic audio played as rumble, since the voice coils need the pad's USB audio device.
+    haptic_rumble: HapticRumble,
     warned_missing_device: bool,
+    retry: Backoff,
 }
 
 impl HidOut {
@@ -54,10 +62,32 @@ impl HidOut {
                     }
                 };
                 let mut slots: Vec<Slot> = vec![];
-                while let Ok(first) = rx.recv() {
+                loop {
+                    // Wake for the earliest rumble-from-haptics deadline so the motors always stop when the audio does.
+                    let wake = slots.iter().filter_map(|s| s.haptic_rumble.deadline()).min();
+                    let first = match wake {
+                        None => match rx.recv() {
+                            Ok(cmd) => Some(cmd),
+                            Err(_) => break,
+                        },
+                        Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                            Ok(cmd) => Some(cmd),
+                            Err(RecvTimeoutError::Timeout) => None,
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        },
+                    };
                     let mut dirty = vec![];
-                    for cmd in std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                    for cmd in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
                         if let Some(rank) = handle(&mut slots, cmd) {
+                            if !dirty.contains(&rank) {
+                                dirty.push(rank);
+                            }
+                        }
+                    }
+                    let now = Instant::now();
+                    for (rank, slot) in slots.iter_mut().enumerate() {
+                        if let Some(motor) = slot.haptic_rumble.expire(now) {
+                            set_haptic_motor(&mut slot.state, &mut slot.dirty, motor);
                             if !dirty.contains(&rank) {
                                 dirty.push(rank);
                             }
@@ -94,6 +124,13 @@ impl HidOut {
     }
 }
 
+/// The rumble made from haptics changed; the report must carry it even if the console never asked for rumble itself.
+fn set_haptic_motor(state: &mut OutState, dirty: &mut bool, motor: u8) {
+    state.haptic_motor = motor;
+    state.rumble.get_or_insert((0, 0));
+    *dirty = true;
+}
+
 /// Update the remembered state; the pad that needs a write, if any.
 fn handle(slots: &mut Vec<Slot>, cmd: Cmd) -> Option<usize> {
     let rank = match &cmd {
@@ -109,8 +146,9 @@ fn handle(slots: &mut Vec<Slot>, cmd: Cmd) -> Option<usize> {
             haptic_counter: 0xFF,
             dirty: false,
             haptics: VecDeque::new(),
-            warned_usb_haptics: false,
+            haptic_rumble: HapticRumble::default(),
             warned_missing_device: false,
+            retry: Backoff::default(),
         });
     }
     let s = &mut slots[rank];
@@ -125,16 +163,23 @@ fn handle(slots: &mut Vec<Slot>, cmd: Cmd) -> Option<usize> {
                 s.quiet = q;
                 s.dirty = true;
             }
+            if q {
+                s.haptic_rumble.stop();
+                s.state.haptic_motor = 0;
+            }
         }
         Cmd::Clear(_) => {
             s.state = s.state.silenced();
             s.quiet = false;
             s.dirty = true;
             s.haptics.clear();
+            s.haptic_rumble.stop();
         }
         Cmd::Close(_) => {
             s.dev = None;
             s.haptics.clear();
+            s.haptic_rumble.stop();
+            s.state.haptic_motor = 0;
             return None;
         }
     }
@@ -143,9 +188,15 @@ fn handle(slots: &mut Vec<Slot>, cmd: Cmd) -> Option<usize> {
 
 fn write(api: &mut HidApi, slot: &mut Slot, rank: usize) {
     if slot.dev.is_none() {
+        let now = Instant::now();
+        if slot.retry.blocked(now) {
+            slot.haptics.clear();
+            return;
+        }
         if let Err(e) = api.refresh_devices() {
             slot.haptics.clear();
-            return log::warn!("could not refresh the controller HID list: {e}");
+            let skipped = slot.retry.fail(now, RETRY_AFTER);
+            return log::warn!("could not refresh the controller HID list: {e} ({skipped} attempts skipped)");
         }
         let mut found: Vec<_> = api
             .device_list()
@@ -154,8 +205,11 @@ fn write(api: &mut HidApi, slot: &mut Slot, rank: usize) {
         found.sort_by(|a, b| a.path().cmp(b.path()));
         let Some(info) = found.get(rank) else {
             slot.haptics.clear();
+            let skipped = slot.retry.fail(now, RETRY_AFTER);
             if !slot.warned_missing_device {
-                log::warn!("no DualSense HID device found for connected controller rank {rank}");
+                log::warn!(
+                    "no DualSense HID device found for connected controller rank {rank} ({skipped} attempts skipped)"
+                );
                 slot.warned_missing_device = true;
             }
             return;
@@ -164,16 +218,27 @@ fn write(api: &mut HidApi, slot: &mut Slot, rank: usize) {
         match info.open_device(api) {
             Ok(d) => {
                 slot.dev = Some((d, bus));
-                slot.warned_usb_haptics = false;
                 slot.warned_missing_device = false;
+                slot.retry.clear();
             }
             Err(e) => {
                 slot.haptics.clear();
-                return log::warn!("cannot open the controller for feedback: {e}");
+                let skipped = slot.retry.fail(now, RETRY_AFTER);
+                return log::warn!("cannot open the controller for feedback: {e} ({skipped} attempts skipped)");
             }
         }
     }
     let Some((dev, bus)) = &slot.dev else { return };
+    if *bus == Bus::Usb && !slot.quiet {
+        let now = Instant::now();
+        let mut motor = None;
+        while let Some(pcm) = slot.haptics.pop_front() {
+            motor = slot.haptic_rumble.feed(&pcm, now).or(motor);
+        }
+        if let Some(motor) = motor {
+            set_haptic_motor(&mut slot.state, &mut slot.dirty, motor);
+        }
+    }
     if slot.dirty {
         let state = if slot.quiet { slot.state.silenced() } else { slot.state.clone() };
         slot.seq = (slot.seq + 1) & 0x0F;
@@ -189,11 +254,6 @@ fn write(api: &mut HidApi, slot: &mut Slot, rank: usize) {
         return;
     }
     if *bus == Bus::Usb {
-        if !slot.haptics.is_empty() && !slot.warned_usb_haptics {
-            log::warn!("voice-coil PCM haptics over USB need the controller's CoreAudio output, not HID");
-            slot.warned_usb_haptics = true;
-        }
-        slot.haptics.clear();
         return;
     }
     while let Some(pcm) = slot.haptics.pop_front() {

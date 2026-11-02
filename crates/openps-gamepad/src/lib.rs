@@ -1,6 +1,8 @@
 //! Physical pads. A `PadSource` reports what the pad does, a `PadSink` applies what the console asks of it.
 //! Everything here is platform-neutral; the macOS implementation lives behind `cfg(target_os = "macos")`.
 
+pub mod backoff;
+pub mod haptic_rumble;
 pub mod haptics;
 pub mod hid;
 #[cfg(target_os = "macos")]
