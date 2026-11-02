@@ -57,6 +57,12 @@ Open **Settings → Controls** to see connected controllers, their type, slot an
 
 Console rumble and lightbar feedback are forwarded to DualSense controllers, with adaptive-trigger effects supported by the DualSense HID path. Bluetooth voice-coil PCM haptics are implemented experimentally but have not yet been verified on hardware; USB PCM haptics are not implemented because they use the controller's separate USB audio path.
 
+**Vibration strength** follows the console's own setting (PS5 *Settings → Accessories → Controllers → Vibration Intensity*): Strong is full strength, Medium half, Weak about a third, Off none. Until the console reports a setting the controller vibrates at full strength. The adaptive-trigger intensity setting is not applied yet.
+
+**Several buttons at once.** The console applies only one new input event per packet, so when a change moves several controls together (for example LT and RT pressed in the same instant), each control is sent in a packet of its own, oldest first. This is what keeps a trigger from being missed or left held when two are pressed or released together.
+
+When a controller is unplugged, loses focus, or you hand the console to the keyboard, its sticks, buttons and motion sensors are all reset, so the console never keeps seeing a stale tilt.
+
 Keyboard and mouse mapping is **off** when a stream starts, so the mouse stays yours unless you switch to it. When enabled, the pointer is hidden and held in the middle of the window, the mouse drives the right stick, and no key or click reaches anything but the game. Mapping also stops by itself when the window loses focus.
 
 | Key | Action |
