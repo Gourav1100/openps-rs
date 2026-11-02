@@ -97,3 +97,17 @@ mod orientation {
         assert!((q.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 1e-4);
     }
 }
+
+#[test]
+fn a_second_finger_passes_through_and_is_clamped() {
+    let raw = RawPad { touch: Some((0.1, 0.2)), touch2: Some((0.9, 0.8)), ..Default::default() };
+    let s = to_state(&raw, DEFAULT_DEADZONE);
+    assert_eq!((s.touch, s.touch2), (Some((0.1, 0.2)), Some((0.9, 0.8))));
+
+    let wild = RawPad { touch2: Some((7.0, -3.0)), ..Default::default() };
+    assert_eq!(
+        to_state(&wild, DEFAULT_DEADZONE).touch2,
+        Some((1.0, 0.0)),
+        "out-of-range finger positions cannot reach the network"
+    );
+}

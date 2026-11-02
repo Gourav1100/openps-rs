@@ -171,7 +171,10 @@ pub struct PadFeedback {
     prev_mask: u32,
     prev_l2: u8,
     prev_r2: u8,
-    touch_prev: Option<(i32, i32)>,
+    /// The two touch slots: where each finger last was, and the id it was given when it landed.
+    touch_prev: [Option<(i32, i32)>; 2],
+    touch_id: [u8; 2],
+    /// One counter hands out ids for both fingers, so they never share one.
     touch_counter: u8,
     last_history_send: f64,
     state_dirty: bool,
@@ -202,7 +205,8 @@ impl PadFeedback {
             prev_mask: 0,
             prev_l2: 0,
             prev_r2: 0,
-            touch_prev: None,
+            touch_prev: [None, None],
+            touch_id: [0, 0],
             touch_counter: 0,
             last_history_send: 0.0,
             state_dirty: false,
@@ -261,6 +265,16 @@ impl PadFeedback {
         self.state_dirty = true;
     }
 
+    /// The id for a finger landing in `slot`: the next 7-bit counter value that is not the id of the finger still down in the
+    /// other slot (the original app's `increaseMainTouchCounter` / `increaseSecondTouchCounter`).
+    fn next_touch_id(&mut self, slot: usize) -> u8 {
+        self.touch_counter = (self.touch_counter + 1) & 0x7F;
+        if self.touch_prev[1 - slot].is_some() && self.touch_counter == self.touch_id[1 - slot] {
+            self.touch_counter = (self.touch_counter + 1) & 0x7F;
+        }
+        self.touch_counter
+    }
+
     /// Records the digital button edges in `diff`: the presses when `pressed`, the releases otherwise.
     fn button_edges(&mut self, diff: u32, mask: u32, pressed: bool, u: &mut Update) {
         for bit in [CROSS, CIRCLE, SQUARE, TRIANGLE, DL, DR, DU, DD, L1, R1, L3, R3, OPTIONS, SHARE, TOUCHPAD, PS] {
@@ -295,24 +309,26 @@ impl PadFeedback {
         let diff = mask ^ self.prev_mask;
         self.button_edges(diff, mask, false, &mut u);
 
-        // touch: down/move records while a finger is on the pad, one up record when it lifts
-        let cur = st.touch.map(|(x, y)| ((x * TOUCH_W) as i32, (y * TOUCH_H) as i32));
-        if cur != self.touch_prev {
+        // touch: down/move records while a finger is on the pad, one up record when it lifts (two slots, like the original app)
+        for (slot, finger) in [st.touch, st.touch2].into_iter().enumerate() {
+            let cur = finger.map(|(x, y)| ((x * TOUCH_W) as i32, (y * TOUCH_H) as i32));
+            if cur == self.touch_prev[slot] {
+                continue;
+            }
             match cur {
                 Some((x, y)) => {
-                    if self.touch_prev.is_none() {
-                        self.touch_counter = (self.touch_counter + 1) & 0x7F;
+                    if self.touch_prev[slot].is_none() {
+                        self.touch_id[slot] = self.next_touch_id(slot);
                     } // new finger-down
-                    self.push(touch_record(x, y, self.touch_counter, true).to_vec());
-                    self.emit();
+                    self.push(touch_record(x, y, self.touch_id[slot], true).to_vec());
                 }
                 None => {
-                    let (x, y) = self.touch_prev.unwrap();
-                    self.push(touch_record(x, y, self.touch_counter, false).to_vec());
-                    self.emit();
+                    let (x, y) = self.touch_prev[slot].unwrap();
+                    self.push(touch_record(x, y, self.touch_id[slot], false).to_vec());
                 }
             }
-            self.touch_prev = cur;
+            self.emit();
+            self.touch_prev[slot] = cur;
             u.history_changed = true;
         }
 

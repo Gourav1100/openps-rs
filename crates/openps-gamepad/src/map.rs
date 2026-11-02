@@ -13,6 +13,7 @@ pub struct RawPad {
     pub l2: f64,
     pub r2: f64,
     pub touch: Option<(f64, f64)>,
+    pub touch2: Option<(f64, f64)>,
 }
 
 pub const DEFAULT_DEADZONE: f64 = 0.08;
@@ -41,6 +42,7 @@ pub fn to_state(raw: &RawPad, deadzone: f64) -> ControllerState {
         l2: raw.l2,
         r2: raw.r2,
         touch: raw.touch,
+        touch2: raw.touch2,
     }
     .clamped()
 }

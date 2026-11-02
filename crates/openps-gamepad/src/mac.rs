@@ -96,6 +96,24 @@ impl MacPads {
     pub fn set_deadzone(&self, dz: f64) {
         *self.shared.deadzone.lock().unwrap_or_else(PoisonError::into_inner) = dz.clamp(0.0, 0.5);
     }
+
+    /// Read every pad again and report its state. GameController delivers nothing while the app is in the background, so a button
+    /// let go meanwhile would otherwise stay "held" in the arbiter's memory until the pad next changes; call this when the app comes
+    /// to the front. It runs on the queue GameController uses for its handlers, so this read can never be queued behind a newer one.
+    pub fn resnapshot(&self) {
+        let pads: Vec<(u32, Retained<GCController>)> = {
+            let pads = self.shared.pads.lock().unwrap_or_else(PoisonError::into_inner);
+            pads.iter().map(|p| (p.0.id, p.0.ctrl.clone())).collect()
+        };
+        let job = Ship((self.shared.clone(), pads));
+        self.shared.queue.0.exec_async(move || {
+            let job = job; // capture the whole wrapper (it is `Send`), not its fields
+            let (shared, pads) = &job.0;
+            for (id, ctrl) in pads {
+                send_state(shared, *id, ctrl);
+            }
+        });
+    }
 }
 
 unsafe fn controller_of(n: NonNull<NSNotification>) -> Option<Retained<GCController>> {
@@ -241,11 +259,13 @@ fn read(gp: &GCExtendedGamepad) -> RawPad {
         if let Some(ds) = gp.downcast_ref::<GCDualSenseGamepad>() {
             b(&ds.touchpadButton(), Button::TOUCHPAD);
             raw.touch = finger(&ds.touchpadPrimary());
+            raw.touch2 = finger(&ds.touchpadSecondary());
         } else if let Some(ds) = gp.downcast_ref::<GCDualShockGamepad>() {
             if let Some(x) = ds.touchpadButton() {
                 b(&x, Button::TOUCHPAD);
             }
             raw.touch = ds.touchpadPrimary().and_then(|p| finger(&p));
+            raw.touch2 = ds.touchpadSecondary().and_then(|p| finger(&p));
         }
         raw.l2 = f64::from(gp.leftTrigger().value());
         raw.r2 = f64::from(gp.rightTrigger().value());

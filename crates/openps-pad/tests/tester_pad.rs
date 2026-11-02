@@ -230,6 +230,65 @@ fn idle_sensors_encode_to_the_initial_state_bytes() {
     assert_eq!(p.state_payload(12)[1..17], fresh[1..17]);
 }
 
+fn finger_records(packets: &[Vec<u8>]) -> Vec<(bool, u8)> {
+    // (down?, id) of the newest touch record of every packet, in packet order
+    packets
+        .iter()
+        .map(|p| {
+            let r = history_records(p).into_iter().find(|r| r[0] & 0xE0 == 0xC0).expect("a touch record");
+            (r[0] & 0xF0 == 0xD0, r[1])
+        })
+        .collect()
+}
+
+#[test]
+fn two_fingers_get_distinct_ids_and_a_record_each() {
+    // PXPlay and chiaki-ng both send two touch slots with different ids.
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.touch = Some((0.25, 0.5));
+    s.touch2 = Some((0.75, 0.5));
+    p.update(&s, 0.0);
+    assert_eq!(finger_records(&p.take_history_packets(0.0)), vec![(true, 1), (true, 2)]);
+
+    s.touch2 = Some((0.8, 0.5)); // the second finger moves: same id
+    p.update(&s, 0.1);
+    assert_eq!(finger_records(&p.take_history_packets(0.1)), vec![(true, 2)]);
+
+    s.touch = None; // the first lifts, the second stays down
+    p.update(&s, 0.2);
+    assert_eq!(finger_records(&p.take_history_packets(0.2)), vec![(false, 1)]);
+
+    s.touch2 = None;
+    p.update(&s, 0.3);
+    assert_eq!(finger_records(&p.take_history_packets(0.3)), vec![(false, 2)]);
+}
+
+#[test]
+fn a_new_finger_never_takes_the_id_of_the_finger_still_down() {
+    let mut p = PadFeedback::new(0);
+    let mut s = st();
+    s.touch = Some((0.5, 0.5));
+    p.update(&s, 0.0);
+    let held = finger_records(&p.take_history_packets(0.0))[0].1;
+    for i in 0..400 {
+        s.touch2 = Some((0.1, 0.1));
+        p.update(&s, f64::from(i));
+        let down = finger_records(&p.take_history_packets(0.0));
+        assert!(down[0].1 <= 0x7F && down[0].1 != held, "iteration {i}: {down:?} vs held {held}");
+        s.touch2 = None;
+        p.update(&s, f64::from(i) + 0.5);
+        p.take_history_packets(0.0);
+    }
+}
+
+#[test]
+fn the_second_finger_is_clamped_like_the_first() {
+    let mut s = st();
+    s.touch2 = Some((9.0, -1.0));
+    assert_eq!(s.clamped().touch2, Some((1.0, 0.0)));
+}
+
 #[test]
 fn unsent_packets_are_bounded_when_nobody_takes_them() {
     let mut p = PadFeedback::new(0);

@@ -64,6 +64,8 @@ pub struct ControllerState {
     pub l2: f64,
     pub r2: f64,
     pub touch: Option<(f64, f64)>,
+    /// The second finger on the touchpad (a physical pad only; the keyboard mapper never uses it).
+    pub touch2: Option<(f64, f64)>,
 }
 
 impl ControllerState {
@@ -79,6 +81,7 @@ impl ControllerState {
             l2: c(self.l2, 0.0, 1.0),
             r2: c(self.r2, 0.0, 1.0),
             touch: self.touch.map(|(x, y)| (c(x, 0.0, 1.0), c(y, 0.0, 1.0))),
+            touch2: self.touch2.map(|(x, y)| (c(x, 0.0, 1.0), c(y, 0.0, 1.0))),
         }
     }
 }
