@@ -46,6 +46,10 @@ pub trait MediaSink: Send + Sync {
     fn take_keyframe_request(&self) -> bool {
         false
     }
+    /// Pictures shown so far this session, or `None` if the sink does not decode (then nothing is watched for a first picture).
+    fn pictures_shown(&self) -> Option<u64> {
+        None
+    }
     fn video(&self, _frame: Frame) {}
     fn audio(&self, _frames: Vec<OpusFrame>) {}
     fn haptic(&self, _frame: [u8; 120]) {}

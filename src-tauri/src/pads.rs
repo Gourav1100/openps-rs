@@ -7,6 +7,7 @@ use openps_gamepad::hid::HidOut;
 use openps_gamepad::mac::MacPads;
 use openps_gamepad::map::DEFAULT_DEADZONE;
 use openps_gamepad::mode::{Arbiter, PadCmd};
+use openps_gamepad::report::{Probe, Tuning};
 use openps_stream::padblob::PadOutput;
 use serde::Serialize;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -181,6 +182,35 @@ pub fn controller_set_deadzone(app: AppHandle, deadzone: f64) -> Result<f64, Str
     Ok(deadzone)
 }
 
+/// The saved rumble and trigger strength, for every DualSense.
+pub fn apply_tuning(app: &AppHandle, o: &openps_core::StreamOptions) {
+    let Some(st) = app.try_state::<PadState>() else { return };
+    st.hid.tune(tuning_of(o));
+}
+
+fn tuning_of(o: &openps_core::StreamOptions) -> Tuning {
+    Tuning { rumble_pct: o.rumble_pct.min(200), trigger_pct: o.trigger_pct.min(100) }
+}
+
+/// A Test button: every connected DualSense rumbles (`"rumble"`) or resists at its triggers (`"trigger"`) for a moment.
+#[tauri::command]
+pub fn controller_test(app: AppHandle, kind: String) -> Result<u64, String> {
+    let probe = match kind.as_str() {
+        "rumble" => Probe::Rumble,
+        "trigger" => Probe::Trigger,
+        _ => return Err("unknown test".into()),
+    };
+    let st = app.try_state::<PadState>().ok_or("controller support is not initialized")?;
+    let ranks = st.arbiter.lock().unwrap_or_else(PoisonError::into_inner).dualsense_ranks();
+    if ranks.is_empty() {
+        return Err("Connect a DualSense to test this (rumble and adaptive triggers are DualSense features).".into());
+    }
+    for (_, rank) in ranks {
+        st.hid.probe(rank, probe);
+    }
+    Ok(probe.duration().as_millis() as u64) // how long the screen should wait before offering the test again
+}
+
 fn validate_deadzone(deadzone: f64) -> Result<f64, String> {
     if !deadzone.is_finite() || !(0.0..=0.5).contains(&deadzone) {
         return Err("deadzone must be between 0 and 0.5".into());
@@ -215,6 +245,11 @@ fn output(out: PadOutput) {
     let Some(st) = app.try_state::<PadState>() else { return };
     let rank = st.arbiter.lock().unwrap_or_else(PoisonError::into_inner).dualsense_ranks();
     match &out {
+        PadOutput::MotionReset => {
+            if let Some(source) = st._source.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                source.reset_motion();
+            }
+        }
         PadOutput::Intensity { .. } => {
             for (_, rank) in rank {
                 st.hid.apply(rank, &out);
@@ -249,6 +284,9 @@ impl MediaSink for WithPads {
     }
     fn take_keyframe_request(&self) -> bool {
         self.0.take_keyframe_request()
+    }
+    fn pictures_shown(&self) -> Option<u64> {
+        self.0.pictures_shown()
     }
     fn video(&self, frame: openps_stream::video::Frame) {
         self.0.video(frame);

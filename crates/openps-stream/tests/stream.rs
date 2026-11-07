@@ -439,3 +439,9 @@ fn garbage_is_ignored() {
     assert!(s.handle_datagram(0.0, &[0x0F; 40]).is_empty()); // unknown type
     assert!(drain(&mut s).is_empty());
 }
+
+#[test]
+fn the_default_video_window_is_two_like_the_original_apps_few_setting() {
+    // With 3, a complete frame is discarded after each loss, so the next frame loses its reference.
+    assert_eq!(StreamConfig::default().video_window, 2);
+}

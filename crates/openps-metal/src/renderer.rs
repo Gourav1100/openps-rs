@@ -9,6 +9,7 @@
 
 use crate::camera::CameraComp;
 use crate::gpu::{upscale_target, Cmd, Gpu, Tex};
+use crate::ladder::RateLadder;
 use crate::look::SharedLook;
 use crate::timeline::Timeline;
 use objc2::rc::Retained;
@@ -76,21 +77,61 @@ pub fn effective_rate(requested: u16, refresh: f64) -> (f64, u32, bool) {
     (req, 1, true)
 }
 
+/// `effective_rate`, except that with `uncapped` a rate above the display's refresh rate is kept as it is (`capped` is true: each frame is
+/// scheduled for its own moment and handed over then, and the display shows the newest at each refresh).
+pub fn effective_rate_with(requested: u16, refresh: f64, uncapped: bool) -> (f64, u32, bool) {
+    if uncapped && refresh >= 1.0 && f64::from(requested) > refresh * 1.01 {
+        return (f64::from(requested), 1, true);
+    }
+    effective_rate(requested, refresh)
+}
+
+/// Rate the renderer paces to after the adaptive ladder. On a fixed-refresh display a rate below the stream's (real pictures are being
+/// dropped) is rounded down to one that holds every picture for the same number of refreshes, unless it is already within a tenth of the
+/// next one up (`ladder::settled_rate`); on a variable-refresh display it is kept.
+/// A rate above the stream's (generated frames, placed for the refresh they are shown on) is kept. When the display's refresh rate
+/// cannot be read the ask is capped, so "the display's rate" never turns into 240.
+pub fn settle_held_rate(held: u16, src_fps: f64, refresh: f64, vrr: bool) -> u16 {
+    const UNKNOWN_REFRESH_CAP_HZ: u16 = 120;
+    if !(refresh.is_finite() && refresh >= 1.0) {
+        return held.min(UNKNOWN_REFRESH_CAP_HZ);
+    }
+    if !vrr && src_fps > 1.0 && f64::from(held) < src_fps * 0.97 {
+        return crate::ladder::settled_rate(held, refresh);
+    }
+    held
+}
+
+/// How much larger than the stream the GPU draws the picture (never larger than the window can show).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Upscale {
     Off,
-    /// Up to 1440 px tall.
-    Qhd,
-    /// Up to 2160 px tall.
-    Uhd,
+    /// 4/3 of the stream's height (1080p becomes 1440p).
+    X1_33,
+    X1_5,
+    X2,
 }
 impl Upscale {
-    pub fn height(self) -> usize {
+    pub fn factor(self) -> f64 {
         match self {
-            Upscale::Off => 0,
-            Upscale::Qhd => 1440,
-            Upscale::Uhd => 2160,
+            Upscale::Off => 0.0,
+            Upscale::X1_33 => 4.0 / 3.0,
+            Upscale::X1_5 => 1.5,
+            Upscale::X2 => 2.0,
         }
+    }
+
+    /// The nearest known multiple; anything that is not one of them does not upscale.
+    pub fn from_factor(f: f64) -> Self {
+        [Upscale::X1_33, Upscale::X1_5, Upscale::X2]
+            .into_iter()
+            .find(|u| (u.factor() - f).abs() < 1e-6)
+            .unwrap_or(Upscale::Off)
+    }
+
+    /// The height to draw at for a stream `src_height` tall; `None` when not upscaling.
+    pub fn target_height(self, src_height: usize) -> Option<usize> {
+        (self != Upscale::Off).then(|| (src_height as f64 * self.factor()).round() as usize)
     }
 }
 
@@ -115,10 +156,25 @@ pub struct RenderSettings {
     pub camera: bool,
     /// Make the interpolated frame with Apple's MetalFX instead of the built-in interpolator (Smooth mode, about 2x only).
     pub metalfx: bool,
+    /// Upscale with AMD's FSR 1 (EASU, then the same finishing pass) instead of MetalFX's spatial scaler.
+    pub fsr: bool,
+    /// Run the MetalFX scaler in linear light (the FSR path has no such mode).
+    pub linear_light: bool,
+    /// When the GPU cannot keep the rate that is asked for, lower the rate in steps of 5 fps and keep every filter on (see
+    /// [`crate::ladder`]); off: the finishing pass is given up instead, as before.
+    pub adaptive: bool,
+    /// Smooth mode's smoothing buffer (see `Timeline::set_buffer`).
+    pub jitter_buffer: bool,
+    /// Make and present frames above the display's refresh rate (see `effective_rate`).
+    pub uncapped: bool,
     /// Edge contrast of the upscaler, 0.0 (smooth) ..= 1.0 (as MetalFX makes it).
     pub sharpness: f32,
+    /// Adaptive sharpening (RCAS) of the upscaled picture, 0.0 (off) ..= 2.0; 1.0 is the measured best (see `gpu::rcas_lobe`).
+    pub rcas: f32,
     /// Colour saturation, 1.0 = as the stream is.
     pub saturation: f32,
+    /// Fill the black bars around the picture with a soft blurred glow of it.
+    pub immersion: bool,
 }
 impl Default for RenderSettings {
     fn default() -> Self {
@@ -129,8 +185,15 @@ impl Default for RenderSettings {
             mode: FrameMode::ZeroLatency,
             camera: false,
             metalfx: false,
+            fsr: false,
+            linear_light: true,
+            adaptive: false,
+            jitter_buffer: false,
+            uncapped: false,
             sharpness: 1.0,
+            rcas: 1.0,
             saturation: 1.0,
+            immersion: false,
         }
     }
 }
@@ -161,9 +224,45 @@ pub struct RenderStats {
     pub gpu_ms: f64,
     pub queue_delay_ms: f64,
     pub network_jitter_ms: f64,
+    /// How much the smoothing buffer holds Smooth mode's picture back now (0 when it is off or not in Smooth mode).
+    pub playout_ms: f64,
+    /// Frames are made and presented above the display's refresh rate (the setting is on and the window is not full screen).
+    pub uncapped_active: bool,
     pub upscaled: bool,
+    /// The height the picture is drawn at while upscaled (0 otherwise).
+    pub upscale_height: usize,
+    /// The upscaled picture went through the finishing pass (linear light, the sharpness blend, RCAS).
+    pub finish_pass: bool,
+    /// The MetalFX scaler runs in linear light; this Mac could not make that scaler (the perceptual mode is used instead).
+    pub linear_active: bool,
+    pub linear_unavailable: bool,
+    /// RCAS was applied to the last upscaled picture (the slider is above 0 and the finishing guard has not given the pass up).
+    pub rcas_active: bool,
+    /// The finishing-pass guard: given up (until the settings change), consecutive too-busy pictures so far, the number that trips it,
+    /// and the GPU time per picture above which a picture counts as too busy (70 % of the interval), milliseconds.
+    pub finish_guard_off: bool,
+    pub finish_guard_slow: u32,
+    pub finish_guard_limit: u32,
+    pub finish_guard_ms: f64,
+    /// The adaptive frame rate: switched on, the rate the settings ask for (before any limit), the limit now in force in fps (0 = none), the
+    /// load over the last second at the rate being shown (the share of the time the GPU is busy, and the share of the time between two pictures
+    /// that the slowest 5 % of them take), and the seconds it has been too high so far (the rate comes down at
+    /// [`crate::ladder::DOWN_AFTER_S`]).
+    pub adaptive: bool,
+    pub asked_hz: f64,
+    pub adaptive_cap_hz: f64,
+    pub adaptive_load: f64,
+    pub adaptive_peak: f64,
+    pub adaptive_over_s: f64,
+    /// Command buffers on the GPU and frames waiting in the mailbox right now.
+    pub gpu_inflight: usize,
+    pub mailbox_len: usize,
+    /// The settings the renderer is running with now (after the app's mapping of the user's choices).
+    pub settings: RenderSettings,
     pub generating: bool,
     pub camera_active: bool,
+    /// The motion search is being given the camera motion the stick commands (it has been learned and is in use).
+    pub input_prior_active: bool,
     pub camera_lag_ms: f64,
     pub camera_explained: f64,
     pub drawable_size: (usize, usize),
@@ -184,6 +283,8 @@ pub struct RenderStats {
     pub metalfx_active: bool,
     /// This Mac can do MetalFX frame interpolation.
     pub metalfx_available: bool,
+    /// The last picture was upscaled by FSR (EASU) instead of the MetalFX scaler.
+    pub fsr_active: bool,
     /// The display changes its refresh rate frame by frame (frames are paced by the display); otherwise a rate that does not divide the
     /// refresh rate is paced by our own clock and may tear.
     pub variable_refresh: bool,
@@ -261,6 +362,9 @@ struct Shared {
     /// Serializes new-frame arrivals with the display thread's periodic duplicate fallback.
     display: Mutex<DuplicateDisplay<Pending>>,
     counts: Mutex<Counts>,
+    /// Milliseconds added to every picture's measured GPU time (a test and demo aid: it makes a light stream look like a heavy one, to see
+    /// the adaptive frame rate work). Starts from `OPENPS_EXTRA_GPU_MS`; see [`MetalRenderer::set_extra_gpu_ms`].
+    extra_gpu_ms: std::sync::atomic::AtomicU64,
 }
 
 pub struct MetalRenderer {
@@ -299,6 +403,14 @@ impl MetalRenderer {
             gate: Mutex::new(DupGate { prev: vec![], rule: RepeatRule::default() }),
             display: Mutex::new(DuplicateDisplay::new(Instant::now())),
             counts: Mutex::new(Counts::default()),
+            extra_gpu_ms: std::sync::atomic::AtomicU64::new(
+                std::env::var("OPENPS_EXTRA_GPU_MS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && (0.0..=1000.0).contains(v))
+                    .unwrap_or(0.0)
+                    .to_bits(),
+            ),
         });
         let (tx, rx) = channel::<Result<usize, String>>();
         let sh = shared.clone();
@@ -320,6 +432,14 @@ impl MetalRenderer {
     /// The `CAMetalLayer` to install as a view's layer.
     pub fn layer_ptr(&self) -> *mut c_void {
         self.layer as *mut c_void
+    }
+
+    /// Add `ms` to every picture's measured GPU time, as if the filters cost that much more (0 = off). For tests and demonstrations of the
+    /// adaptive frame rate, which reacts to that time; nothing is drawn differently. Anything not between 0 and 1000 is ignored.
+    pub fn set_extra_gpu_ms(&self, ms: f64) {
+        if ms.is_finite() && (0.0..=1000.0).contains(&ms) {
+            self.shared.extra_gpu_ms.store(ms.to_bits(), Ordering::Relaxed);
+        }
     }
 
     /// Fix the drawable size (pixels). In the app the view's bounds decide this; headless use (tests) has no view.
@@ -838,6 +958,14 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
     let (mut vrr, mut last_vrr_check) = (crate::display_is_variable(), Instant::now());
     let mut next_present = 0.0f64;
     let (mut gpu_ms, mut wait_ms) = (0.0f64, 0.0f64);
+    // The upscaler's finishing pass (linear light, RCAS) costs about 2 ms at 4K: when the GPU keeps using most of the time between two displayed
+    // pictures, it is given up (the plain upscaler is used) until the upscaling, sharpness or rate settings change.
+    let (mut finish_slow, mut finish_off, mut finish_cfg) =
+        (0u32, false, (Upscale::Off, 0u16, 0u32, 0u32, 0u32, true, false, false));
+    // The adaptive frame rate: the limit the GPU's load calls for, and (when fewer pictures are shown than arrive) the moment the next
+    // real picture is due, so the ones in between are dropped evenly.
+    let mut ladder = RateLadder::default();
+    let mut next_due: Option<Instant> = None;
     let mut s = RenderStats::default();
 
     while !shared.stop.load(Ordering::Relaxed) {
@@ -855,6 +983,7 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 src_locked = 0.0;
             }
             let settings = *lock(&shared.settings);
+            tl.set_buffer(settings.jitter_buffer && settings.mode == FrameMode::Smooth);
             // The rate the game renders: distinct pictures per second, in whatever order and rhythm they arrive (the stream's own rate and
             // the setting are only the starting guess until a second of frames has been seen). A mostly still picture (a menu) has too few
             // changes to say anything: the last good value is kept.
@@ -908,25 +1037,56 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
             }
             let src_fps = src_locked;
             let refresh = crate::main_display_hz();
-            // locked to what the menu says (the multiple of the stream's rate, or the display rate), never above what the display can show
-            let (eff_hz, vsyncs, capped) = effective_rate(requested_rate(&settings, src_fps), refresh);
+            // locked to what the menu says (the multiple of the stream's rate, or the display rate), never above what the display can show;
+            // with the adaptive frame rate on, also never above what the GPU can hold with every filter running (steps of 5 fps)
+            let asked = requested_rate(&settings, src_fps);
+            // what is really asked for: never above what the display can show, unless the user lets the renderer run ahead of it (windowed:
+            // the compositor shows the newest frame at each refresh; in full screen the frames would only queue up, so the display's rate is kept)
+            let uncapped = settings.uncapped && !crate::fullscreen();
+            let asked_hz = if refresh >= 1.0 && !uncapped { f64::from(asked).min(refresh) } else { f64::from(asked) };
+            let held = if settings.adaptive { ladder.apply(asked) } else { asked };
+            let held = settle_held_rate(held, src_fps, refresh, vrr);
+            let (eff_hz, vsyncs, capped) = effective_rate_with(held, refresh, uncapped);
             // frames are only generated up to the rate that was selected (and the display can show): at or below the source rate each
             // real frame is simply shown as it arrives
             let wants_more = eff_hz > src_fps * 1.1;
             let generating = wants_more && (eff_hz > src_fps * 1.1 || settings.mode == FrameMode::Smooth);
             let ticking = generating || settings.camera;
             gpu.sharpness = settings.sharpness;
+            let cfg = (
+                settings.upscale,
+                settings.display_hz,
+                settings.gen_factor.to_bits(),
+                settings.sharpness.to_bits(),
+                settings.rcas.to_bits(),
+                settings.linear_light,
+                settings.fsr,
+                settings.adaptive,
+            );
+            if cfg != finish_cfg {
+                (finish_cfg, finish_off, finish_slow) = (cfg, false, 0);
+                ladder.reset(); // what the GPU can hold is found out again
+            }
+            gpu.linear_upscale = settings.linear_light && !finish_off;
+            gpu.rcas = if finish_off { 0.0 } else { settings.rcas };
             gpu.saturation = settings.saturation;
+            gpu.immersion = settings.immersion;
             // MetalFX makes exactly the midpoint between two frames, so it is the right tool when every generated frame is a midpoint (about 2x).
             // At other multiples some generated frames would come from it and the others from the built-in interpolator, two different looks
             // alternating, which flickers: there the built-in interpolator makes all of them.
-            gpu.fx_use = settings.metalfx
-                && gpu.fx_available
-                && settings.mode == FrameMode::Smooth
-                && generating
-                && (1.8..=2.3).contains(&(eff_hz / src_fps));
+            let midpoints_only =
+                settings.mode == FrameMode::Smooth && generating && (1.8..=2.3).contains(&(eff_hz / src_fps));
+            gpu.fx_use = settings.metalfx && gpu.fx_available && midpoints_only;
+            gpu.fsr = settings.fsr;
 
             // Event-driven when there is nothing to generate: wait for a frame instead of redrawing the same one.
+            // Fewer pictures are shown than arrive (the frame rate was lowered below the stream's): the real pictures in between are dropped
+            // evenly, each shown one when it is due, so 45 of 60 are kept as three of every four and not as every other one.
+            let thin = eff_hz < src_fps * 0.97;
+            let take_ok = !thin || next_due.is_none_or(|d| Instant::now() >= d);
+            if !thin {
+                next_due = None;
+            }
             if !ticking {
                 let mut m = lock(&shared.mailbox);
                 let timeout = if lock(&shared.display).duplicate_frame.is_some() {
@@ -937,7 +1097,13 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 if m.is_empty() {
                     m = shared.wake.wait_timeout(m, timeout).unwrap_or_else(PoisonError::into_inner).0;
                 }
+                let waiting = !m.is_empty() && !take_ok;
                 drop(m);
+                if waiting {
+                    let left = next_due.map_or(Duration::ZERO, |d| d.saturating_duration_since(Instant::now()));
+                    std::thread::sleep(left.min(Duration::from_millis(2)));
+                    return;
+                }
                 let mailbox = lock(&shared.mailbox);
                 let display = lock(&shared.display);
                 let has_frame = !mailbox.is_empty();
@@ -971,9 +1137,33 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                             }
                         }
                     }
-                    let dt = (c.GPUEndTime() - c.GPUStartTime()) * 1e3;
+                    let dt = (c.GPUEndTime() - c.GPUStartTime()) * 1e3
+                        + f64::from_bits(shared.extra_gpu_ms.load(Ordering::Relaxed));
                     if dt.is_finite() && dt >= 0.0 {
                         gpu_ms += (dt - gpu_ms) * 0.1;
+                        if settings.adaptive {
+                            // the adaptive frame rate: when the pictures keep the GPU busy for most of the time between two displayed ones,
+                            // the rate comes down gently (and back up when there is room), and every filter stays on
+                            if ladder.observe(dt, eff_hz, asked_hz) {
+                                match ladder.cap() {
+                                    Some(c) => eprintln!("the GPU needs {dt:.1} ms per picture: the frame rate is held to {c} fps (asked for {asked_hz:.0})"),
+                                    None => eprintln!("the GPU has room again: back to the {asked_hz:.0} fps that was asked for"),
+                                }
+                            }
+                        }
+                        // the finishing-pass guard: pictures in a row that kept the GPU busy for most of the time between two displayed ones
+                        let interval = 1e3 / eff_hz.max(1.0);
+                        if settings.upscale != Upscale::Off && !finish_off && !settings.adaptive {
+                            if crate::gpu::finish_pass_too_slow(dt, interval) {
+                                finish_slow += 1;
+                                if finish_slow >= crate::gpu::FINISH_GUARD_PICTURES {
+                                    finish_off = true;
+                                    eprintln!("the GPU needs {dt:.1} ms per picture, most of the {interval:.1} ms there is: the upscaler's linear-light and sharpening pass is switched off");
+                                }
+                            } else {
+                                finish_slow = 0;
+                            }
+                        }
                     }
                 }
             }
@@ -1060,23 +1250,40 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 None => now(),
             };
             let mut got_new = false;
-            let next_frame = {
+            let next_frame = if take_ok {
                 let mut mailbox = lock(&shared.mailbox);
                 let mut display = lock(&shared.display);
                 next_display_frame(&mut mailbox, &mut display, Instant::now())
+            } else {
+                None
             };
+            if thin && next_frame.is_some() {
+                let step = Duration::from_secs_f64(1.0 / eff_hz.max(1.0));
+                let at = Instant::now();
+                let due = next_due.unwrap_or(at) + step;
+                // a due time that has fallen a whole step behind is not owed: start again from now
+                next_due = Some(if due + step < at { at } else { due });
+            }
             if let Some(p) = next_frame {
                 if let Some(tex) = copy_in(&gpu, &cmd, &mut ring, &p.frame) {
                     let id = p.frame.source_id();
                     if tl.on_frame(id, p.arrived) {
                         let motion = ticking || settings.camera;
+                        // what the stick says the camera did between the last picture and this one: a starting point for the motion search
+                        let prior = cur_id
+                            .and_then(|c| Some((tl.content_time(c)?, tl.content_time(id)?)))
+                            .and_then(|(t0, t1)| cam.predict(t0, t1));
+                        s.input_prior_active = prior.is_some();
+                        if motion {
+                            gpu.set_input_prior(prior);
+                        }
                         if gpu.ingest(&cmd, tex, motion).is_ok() {
                             prev_id = cur_id;
                             cur_id = Some(id);
                             cur_arrived = p.arrived;
                             got_new = true;
                             s.real_frames += 1;
-                            if let (Some(pid), true) = (prev_id, awaiting.is_none() && settings.camera) {
+                            if let (Some(pid), true) = (prev_id, awaiting.is_none() && motion) {
                                 if let (Some(t0), Some(t1)) = (tl.content_time(pid), tl.content_time(id)) {
                                     awaiting = Some((cmd.clone(), t0, t1, gpu.motion_snapshot()));
                                 }
@@ -1093,25 +1300,25 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
 
             let (dw, dh) = (drawable_tex.width(), drawable_tex.height());
             s.drawable_size = (dw, dh);
+            let src = gpu_cur_size(&gpu);
+            let out = settings.upscale.target_height(src.1).and_then(|h| upscale_target(src, (dw, dh), h));
             let (alpha, extra, tex_res) = match settings.mode {
                 FrameMode::Smooth => {
                     let beta = prev_id.map_or(1.0, |p| tl.interp_beta(t_now, p));
-                    let src = gpu_cur_size(&gpu);
-                    let out = upscale_target(src, (dw, dh), settings.upscale.height());
-                    (beta, (0.0, 0.0), gpu.compose_interp(&cmd, beta, out))
+                    (beta, (0.0, 0.0), gpu.compose_interp(&cmd, beta, None))
                 }
                 FrameMode::ZeroLatency => {
                     // the motion field spans `gap` source intervals when frames were dropped on the way: scale it back to one
                     let gap = prev_id.map_or(1, |p| i32::from(id.wrapping_sub(p) as i16).clamp(1, 8)) as f32;
                     let alpha = if generating { tl.alpha(t_now) / gap } else { 0.0 };
                     let mut extra = (0.0f32, 0.0f32);
-                    camera_extra(&cam, &tl, id, t_now, alpha, gpu_cur_size(&gpu), settings.camera, &mut extra, &mut s);
-                    let src = gpu_cur_size(&gpu);
-                    let out = upscale_target(src, (dw, dh), settings.upscale.height());
-                    (alpha, extra, gpu.compose(&cmd, alpha, out, extra))
+                    camera_extra(&cam, &tl, id, t_now, alpha, src, settings.camera, &mut extra, &mut s);
+                    (alpha, extra, gpu.compose(&cmd, alpha, None, extra))
                 }
             };
             let _ = (alpha, extra);
+            // the upscaling is a step of its own (MetalFX or FSR), inside this command buffer
+            let tex_res = tex_res.and_then(|(t, _)| gpu.upscale(&cmd, t, out));
             let Ok((tex, upscaled)) = tex_res else {
                 bump_errors(&shared);
                 return;
@@ -1146,9 +1353,10 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 let block = block2::RcBlock::new(move |d: NonNull<ProtocolObject<dyn MTLDrawable>>| {
                     let shown_at = unsafe { d.as_ref().presentedTime() };
                     let ms = (shown_at - t_commit) * 1e3;
-                    if shown_at > 0.0 {
-                        lock(&shown).push(shown_at);
-                    }
+                    // Metal reports no presented time for some presentation paths (display sync on, composited window): then the moment
+                    // this callback runs, which follows the refresh it was shown on, stands in, so the pacing numbers are never empty
+                    let at = if shown_at > 0.0 { shown_at } else { unsafe { CACurrentMediaTime() } };
+                    lock(&shown).push(at);
                     if shown_at > 0.0 && ms.is_finite() && (0.0..500.0).contains(&ms) {
                         let old = f64::from_bits(bits.load(Ordering::Relaxed));
                         bits.store((old + (ms - old) * 0.05).to_bits(), Ordering::Relaxed);
@@ -1185,7 +1393,10 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 s.frame_wait_ms = wait_ms;
                 s.queue_delay_ms = t.queue_delay * 1e3;
                 s.network_jitter_ms = t.jitter * 1e3;
+                s.playout_ms = tl.playout() * 1e3;
+                s.uncapped_active = uncapped;
                 s.upscaled = upscaled;
+                s.upscale_height = if upscaled { out.map_or(0, |o| o.1) } else { 0 };
                 s.generating = generating;
                 s.effective_hz = eff_hz;
                 s.refresh_hz = refresh;
@@ -1195,6 +1406,23 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                     lock(&shown).summary(1000.0 / eff_hz);
                 s.metalfx_active = gpu.fx_active();
                 s.metalfx_available = gpu.fx_available;
+                s.fsr_active = gpu.fsr_active();
+                s.finish_pass = gpu.finish_pass_active();
+                s.linear_active = gpu.linear_active();
+                s.linear_unavailable = gpu.linear_unavailable();
+                s.rcas_active = s.finish_pass && settings.rcas > 0.0 && !finish_off;
+                s.finish_guard_off = finish_off;
+                s.finish_guard_slow = finish_slow;
+                s.finish_guard_limit = crate::gpu::FINISH_GUARD_PICTURES;
+                s.finish_guard_ms = 0.7 * 1e3 / eff_hz.max(1.0);
+                s.adaptive = settings.adaptive;
+                s.asked_hz = asked_hz;
+                s.adaptive_cap_hz = ladder.cap().map_or(0.0, f64::from);
+                (s.adaptive_load, s.adaptive_peak) = ladder.load();
+                s.adaptive_over_s = ladder.overloaded_for();
+                s.gpu_inflight = inflight.len();
+                s.mailbox_len = lock(&shared.mailbox).len();
+                s.settings = settings;
                 s.variable_refresh = vrr;
                 s.drawables = layer.maximumDrawableCount();
                 if let Some(e) = cam.estimate() {

@@ -87,6 +87,57 @@ mod orientation {
         assert!(q[0].abs() < 0.01, "{q:?}");
     }
 
+    /// Where the estimate thinks gravity is, in the pad's own frame.
+    fn gravity(q: [f32; 4]) -> [f32; 3] {
+        let [x, y, z, w] = q;
+        [2.0 * (x * y + w * z), w * w - x * x + y * y - z * z, 2.0 * (y * z - w * x)]
+    }
+
+    #[test]
+    fn a_pad_held_tilted_when_it_starts_snaps_to_gravity_within_the_warm_up() {
+        // chiaki-ng uses a high filter gain for the first 30 samples so the estimate does not crawl towards the real attitude
+        let tilted = [0.866_025_4, 0.5, 0.0]; // rolled 60 degrees
+        let mut o = Orient::default();
+        let mut q = [0.0; 4];
+        for _ in 0..30 {
+            q = o.update([0.0; 3], tilted, 0.008);
+        }
+        let g = gravity(q);
+        let dot = g[0] * tilted[0] + g[1] * tilted[1] + g[2] * tilted[2];
+        assert!(dot > 0.996, "within 5 degrees after 30 samples, dot = {dot}");
+    }
+
+    #[test]
+    fn after_the_warm_up_the_filter_is_gentle_again() {
+        let mut o = Orient::default();
+        for _ in 0..30 {
+            o.update([0.0; 3], [0.0, 1.0, 0.0], 0.008);
+        }
+        // a brief knock (accelerometer swings for one sample) must not move the estimate much any more
+        let q = o.update([0.0; 3], [1.0, 0.2, 0.0], 0.008);
+        assert!(q[2].abs() < 0.005 && q[0].abs() < 0.005, "{q:?}");
+    }
+
+    #[test]
+    fn a_reset_makes_the_current_heading_the_origin_and_warms_up_again() {
+        let mut o = Orient::default();
+        let mut q = [0.0; 4];
+        for _ in 0..125 {
+            q = o.update([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], 0.008); // turned 1 rad
+        }
+        assert!(2.0 * q[1].atan2(q[3]) > 0.9);
+        o.reset();
+        q = o.update([0.0; 3], [0.0, 1.0, 0.0], 0.008);
+        assert!(q[0].abs() < 1e-3 && q[1].abs() < 1e-3 && q[2].abs() < 1e-3 && (q[3] - 1.0).abs() < 1e-3, "{q:?}");
+        // and it is level-seeking fast again, like at the start
+        let tilted = [0.866_025_4, 0.5, 0.0];
+        for _ in 0..30 {
+            q = o.update([0.0; 3], tilted, 0.008);
+        }
+        let g = gravity(q);
+        assert!(g[0] * tilted[0] + g[1] * tilted[1] > 0.996);
+    }
+
     #[test]
     fn the_result_is_always_a_unit_quaternion() {
         let mut o = Orient::default();

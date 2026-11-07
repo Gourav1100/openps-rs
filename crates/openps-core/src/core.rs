@@ -1,8 +1,10 @@
 //! The application core: everything the UI can ask for, with no UI dependency.
 
 use crate::backend::Backend;
+use crate::capture::VideoCapture;
 use crate::control::{self, ControlCommand};
 use crate::events::{AppEvent, EventSink, MediaSink, StreamStats};
+use crate::picture;
 use crate::store::{ConsoleStore, StoreError};
 use crate::sync::LockExt;
 use crate::types::*;
@@ -181,6 +183,8 @@ struct Inner {
     /// Consoles (by address) that failed while Auto asked for a raised bitrate: they get the default from then on, until restart.
     auto_failed: Mutex<std::collections::HashSet<String>>,
     remote_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// How long a connected session may show no picture before it is failed.
+    first_picture_timeout: Mutex<Duration>,
 }
 
 /// `host -> kbit/s to request`, or `None` for the resolution default.
@@ -227,6 +231,7 @@ impl Core {
                 remote: Mutex::new(None),
                 auto_failed: Mutex::new(Default::default()),
                 remote_cancel: Mutex::new(None),
+                first_picture_timeout: Mutex::new(picture::GIVE_UP_AFTER),
             }),
         }
     }
@@ -234,6 +239,11 @@ impl Core {
     /// Replace how Auto bitrate decides what to ask for (tests; embedders with better knowledge of the network).
     pub fn set_auto_bitrate_probe(&self, f: impl Fn(&str) -> Option<i32> + Send + Sync + 'static) {
         *self.inner.auto_probe.lock_ok() = Arc::new(f);
+    }
+
+    /// How long a connected session may show no picture before it fails (tests shorten it).
+    pub fn set_first_picture_timeout(&self, t: Duration) {
+        *self.inner.first_picture_timeout.lock_ok() = t;
     }
 
     pub fn session_state(&self) -> SessionState {
@@ -650,7 +660,13 @@ impl Core {
             &cancel,
             auto,
         );
-        if let (Some(why), Some(kbps)) = (needs_default_bitrate(&terminal, up), auto) {
+        let decoder_failed = matches!(&terminal, SessionState::Failed { reason } if reason == picture::DECODER_REASON);
+        if decoder_failed && (opts.hevc || opts.hdr) {
+            // The decoder could not show HEVC (or HDR): H.264 is the one format every Mac decodes.
+            log::warn!("{}; retrying with H.264", picture::DECODER_REASON);
+            let h264 = StreamOptions { hevc: false, hdr: false, ..opts };
+            terminal = self.restart(rec, secrets, host, h264, &stop_control, &cancel, auto);
+        } else if let (Some(why), Some(kbps)) = (needs_default_bitrate(&terminal, up), auto) {
             let detail = match &terminal {
                 SessionState::Failed { reason } => reason.clone(),
                 SessionState::Closed { reason } => reason.clone().unwrap_or_default(),
@@ -658,29 +674,43 @@ impl Core {
             };
             log::warn!("{why} ({detail}) while asking for {kbps} kbit/s; retrying with the default bitrate and not raising it for this console again until OpenPS restarts");
             self.inner.auto_failed.lock_ok().insert(host.clone());
-            // a console needs a moment to let go of the session that just ended; a cancel request ends the wait
-            let end = Instant::now() + Duration::from_secs_f64(self.inner.settle_s.clamp(0.0, 60.0));
-            while Instant::now() < end && !cancel.load(Ordering::Relaxed) {
-                std::thread::sleep((end - Instant::now()).min(Duration::from_millis(20)));
-            }
-            if cancel.load(Ordering::Relaxed) {
-                terminal = SessionState::Closed { reason: None };
-            } else {
-                let (tx, rx) = channel::<ControlCommand>();
-                if let Some(a) = self.inner.active.lock_ok().as_mut() {
-                    a.control = tx; // the first attempt's control channel is gone
-                    a.commander = None;
-                }
-                stop_control.store(false, Ordering::Relaxed);
-                self.set_state(SessionState::Connecting);
-                terminal = self.drive_once(rec, secrets, host, opts, rx, &stop_control, &cancel, None).0;
-            }
+            terminal = self.restart(rec, secrets, host, opts, &stop_control, &cancel, None);
         }
         // free the slot BEFORE announcing the end: a handler that reacts by connecting again must be allowed to
         if let Some(a) = self.inner.active.lock_ok().take() {
             a.stop_control.store(true, Ordering::Relaxed);
         }
         self.set_state(terminal);
+    }
+
+    /// Another attempt after one ended: waits for the console to let go of the session that just ended (a cancel request ends the wait
+    /// and closes quietly), then runs again with a fresh control channel.
+    #[allow(clippy::too_many_arguments)]
+    fn restart(
+        &self,
+        rec: ConsoleRecord,
+        secrets: ConsoleSecrets,
+        host: String,
+        opts: StreamOptions,
+        stop_control: &Arc<AtomicBool>,
+        cancel: &Arc<AtomicBool>,
+        auto_kbps: Option<i32>,
+    ) -> SessionState {
+        let end = Instant::now() + Duration::from_secs_f64(self.inner.settle_s.clamp(0.0, 60.0));
+        while Instant::now() < end && !cancel.load(Ordering::Relaxed) {
+            std::thread::sleep((end - Instant::now()).min(Duration::from_millis(20)));
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return SessionState::Closed { reason: None };
+        }
+        let (tx, rx) = channel::<ControlCommand>();
+        if let Some(a) = self.inner.active.lock_ok().as_mut() {
+            a.control = tx; // the previous attempt's control channel is gone
+            a.commander = None;
+        }
+        stop_control.store(false, Ordering::Relaxed);
+        self.set_state(SessionState::Connecting);
+        self.drive_once(rec, secrets, host, opts, rx, stop_control, cancel, auto_kbps).0
     }
 
     /// One attempt: sets up, runs and tears down a session, reporting every step. Returns how it ended and, if it ever connected, how
@@ -755,7 +785,7 @@ impl Core {
                 resend_interval_s: RESEND_INTERVAL_S,
                 max_resends: MAX_RESENDS,
             },
-            StreamConfig { ps5, ..Default::default() },
+            StreamConfig { ps5, congestion: sends_congestion(opts.bitrate), ..Default::default() },
         );
         params.network_test = Some(NetworkTest {
             link: test_link,
@@ -782,6 +812,8 @@ impl Core {
         });
 
         let mut counters = Counters::new();
+        let mut capture = VideoCapture::from_env();
+        let mut watch = picture::PictureWatch::new(*self.inner.first_picture_timeout.lock_ok());
         let commander = handle.commander(); // once, not per notice: video arrives at frame rate
         let terminal = loop {
             let mut next = handle.recv_timeout(Duration::from_millis(100));
@@ -795,7 +827,7 @@ impl Core {
             }
             if let Some(n) = next {
                 // the media sinks (decode, render, audio) run inside this call: contain their panics
-                let step = std::panic::AssertUnwindSafe(|| self.on_notice(n, &commander, &mut counters));
+                let step = std::panic::AssertUnwindSafe(|| self.on_notice(n, &commander, &mut counters, &mut capture));
                 match std::panic::catch_unwind(step) {
                     Ok(Some(t)) => break t,
                     Ok(None) => {}
@@ -803,6 +835,19 @@ impl Core {
                         log::error!("media handling panicked: {}", panic_text(&p));
                         commander.disconnect();
                         break SessionState::Failed { reason: "internal error while handling the stream".into() };
+                    }
+                }
+            }
+            if let Some(up) = counters.connected.map(|t| t.elapsed()) {
+                match watch.check(up, self.inner.media.pictures_shown(), counters.video_seen) {
+                    picture::Watch::Fine => {}
+                    picture::Watch::Slow => {
+                        log::warn!("connected {up:?} ago and still no picture (video seen: {})", counters.video_seen);
+                    }
+                    picture::Watch::GiveUp(reason) => {
+                        log::error!("giving up: {reason}");
+                        commander.disconnect();
+                        break SessionState::Failed { reason: reason.into() };
                     }
                 }
             }
@@ -817,12 +862,23 @@ impl Core {
     }
 
     /// Map one session notice to state/media. Returns the final state when the session is over.
-    fn on_notice(&self, n: Notice, commander: &Commander, counters: &mut Counters) -> Option<SessionState> {
+    fn on_notice(
+        &self,
+        n: Notice,
+        commander: &Commander,
+        counters: &mut Counters,
+        capture: &mut Option<VideoCapture>,
+    ) -> Option<SessionState> {
         match n {
             Notice::NetworkTested(_) => self.set_state(SessionState::TestingNetwork),
             Notice::Handshaking { attempt } => self.set_state(SessionState::Handshaking { attempt }),
             Notice::Connected { takion_version, stream_info } => {
                 counters.connected.get_or_insert_with(Instant::now);
+                if let Some(c) = capture {
+                    for h in stream_info.resolution.iter().filter_map(|r| r.video_header.as_deref()) {
+                        c.parameter_sets(h);
+                    }
+                }
                 self.inner.media.stream_info(&stream_info);
                 self.set_state(SessionState::Connected { takion_version });
                 commander.send(openps_session::Command::PadConnected { pad: 0, connected: true });
@@ -830,6 +886,10 @@ impl Core {
             }
             Notice::Event(e) => match e {
                 Event::Video(f) => {
+                    counters.video_seen = true;
+                    if let Some(c) = capture {
+                        c.frame(&f);
+                    }
                     counters.frames += 1;
                     counters.bytes += f.data.len() as u64;
                     self.inner.media.video(f);
@@ -936,6 +996,12 @@ impl Core {
     }
 }
 
+/// The original app reports congestion to the console only while the bitrate is automatic (-1); with a fixed bitrate the console has
+/// nothing to adapt, so the packets are left out.
+fn sends_congestion(bitrate: i32) -> bool {
+    bitrate == -1
+}
+
 /// A session that ends within this long after connecting, on the console's initiative, did not really start.
 const EARLY_END: Duration = Duration::from_secs(20);
 
@@ -954,6 +1020,8 @@ fn needs_default_bitrate(terminal: &SessionState, up: Option<Duration>) -> Optio
 struct Counters {
     /// When the session reached `Connected` (the first time).
     connected: Option<Instant>,
+    /// Whether any video frame has arrived this session.
+    video_seen: bool,
     frames: u64,
     bytes: u64,
     since: Instant,
@@ -961,7 +1029,12 @@ struct Counters {
 
 impl Counters {
     fn new() -> Self {
-        Self { connected: None, frames: 0, bytes: 0, since: Instant::now() }
+        Self { connected: None, video_seen: false, frames: 0, bytes: 0, since: Instant::now() }
+    }
+
+    /// Start a new one-second sample; what describes the session as a whole stays.
+    fn next_sample(&mut self) {
+        *self = Self { connected: self.connected, video_seen: self.video_seen, ..Self::new() };
     }
 
     fn maybe_emit(&mut self, events: &dyn EventSink, handle: &openps_session::Handle) {
@@ -977,7 +1050,7 @@ impl Counters {
             datagrams_in: s.datagrams_in,
             datagrams_out: s.datagrams_out,
         }));
-        *self = Counters::new();
+        self.next_sample();
     }
 }
 
@@ -1017,5 +1090,25 @@ mod retry_tests {
         assert!(needs_default_bitrate(&closed(None), secs(2)).is_none(), "the user pressed Disconnect");
         assert!(needs_default_bitrate(&closed(None), None).is_none(), "cancelled while connecting");
         assert!(needs_default_bitrate(&SessionState::Idle, secs(1)).is_none());
+    }
+
+    #[test]
+    fn congestion_is_reported_only_for_an_automatic_bitrate() {
+        assert!(sends_congestion(-1));
+        assert!(!sends_congestion(10_000));
+        assert!(!sends_congestion(0));
+    }
+
+    #[test]
+    fn a_new_sample_keeps_what_describes_the_whole_session() {
+        let mut c = Counters::new();
+        c.connected = Some(Instant::now());
+        c.video_seen = true;
+        c.frames = 60;
+        c.bytes = 1000;
+        c.next_sample();
+        assert!(c.connected.is_some(), "the session is still connected: its uptime must survive the sample");
+        assert!(c.video_seen);
+        assert_eq!((c.frames, c.bytes), (0, 0));
     }
 }

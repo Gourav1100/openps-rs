@@ -515,6 +515,19 @@ impl Decoder {
     pub fn reset(&mut self) {
         self.synced = false;
     }
+
+    /// Throw the VideoToolbox session away and make a new one from the current parameter sets (a session can die, for example after the
+    /// system reclaims the hardware decoder, and then fails every frame). Output resumes at the next keyframe. On failure the old session
+    /// is kept.
+    pub fn rebuild(&mut self) -> Result<(), Error> {
+        let (format, session) = Self::make_session(self.codec, &self.params, &self.queue, self.output)?;
+        self.teardown();
+        self.queue.lock().unwrap_or_else(|e| e.into_inner()).clear(); // results of the old session
+        self.format = format;
+        self.session = session;
+        self.synced = false;
+        Ok(())
+    }
 }
 
 fn changed(old: &ParameterSets, new: &ParameterSets) -> bool {

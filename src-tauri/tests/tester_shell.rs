@@ -481,14 +481,71 @@ fn render_settings_accepts_every_possible_stream_option_without_panicking() {
                     saturation: sat,
                     upscale: "\u{0}".repeat(3),
                     frame_mode: "x".repeat(100_000),
-                    framegen: String::new(),
+                    engine: String::new(),
                     ..Default::default()
                 };
                 let r = video::render_settings(&o);
                 assert!(r.sharpness.is_finite() && r.saturation.is_finite());
-                assert_eq!(r.display_hz, if (30..=240).contains(&display) { display } else { 60 });
+                assert_eq!(r.display_hz, video::AUTO_RATE_HZ, "the old display rate is no longer asked for");
             }
         }
+    }
+}
+
+/// The engine choice of the settings reaches the renderer as the right switch, and each filter's own switch turns its effect off.
+#[test]
+fn the_engine_choice_maps_to_the_renderer_switches() {
+    use openps_core::StreamOptions;
+    let o = |engine: &str| video::render_settings(&StreamOptions { engine: engine.into(), ..Default::default() });
+    let r = o("metalfx");
+    assert!(r.metalfx && !r.fsr, "{r:?}");
+    let r = o("fsr");
+    assert!(r.metalfx && r.fsr, "FSR upscales; MetalFX still makes the generated midpoints: {r:?}");
+}
+
+#[test]
+fn every_filter_switch_reaches_the_renderer_as_the_value_that_leaves_the_picture_alone() {
+    use openps_core::StreamOptions;
+    let on = StreamOptions { upscale: "2x".into(), sharpness: 80, rcas: 150, saturation: 130, ..Default::default() };
+    let r = video::render_settings(&on);
+    assert_eq!((r.sharpness, r.rcas, r.saturation), (0.8, 1.5, 1.3));
+    assert!(r.linear_light && r.adaptive);
+    let off = StreamOptions {
+        sharpness_on: false,
+        rcas_on: false,
+        saturation_on: false,
+        linear_light: false,
+        adaptive_fps: false,
+        pacing_buffer: true,
+        uncapped_rate: false,
+        ..on.clone()
+    };
+    let r = video::render_settings(&off);
+    assert!(
+        r.jitter_buffer && !r.uncapped,
+        "the smoothing buffer is on and the display's rate is the limit unless chosen"
+    );
+    let both = video::render_settings(&StreamOptions { pacing_buffer: false, uncapped_rate: true, ..off.clone() });
+    assert!(!both.jitter_buffer && both.uncapped, "the two options reach the renderer");
+    assert_eq!(r.sharpness, 1.0, "with an upscaler, off is the picture as it draws it");
+    assert_eq!((r.rcas, r.saturation), (0.0, 1.0));
+    assert!(!r.linear_light && !r.adaptive);
+    // without upscaling the sharpness setting is an unsharp mask around 50 %: off is 50 %
+    let r = video::render_settings(&StreamOptions { upscale: "off".into(), ..off });
+    assert_eq!(r.sharpness, 0.5);
+}
+
+#[test]
+fn frame_generation_fills_the_display_and_off_shows_frames_as_they_arrive() {
+    use openps_core::StreamOptions;
+    let on = video::render_settings(&StreamOptions { framegen_on: true, ..Default::default() });
+    assert_eq!((on.gen_factor, on.display_hz), (0.0, video::AUTO_RATE_HZ), "on: ask for the most, the display caps it");
+    let off = video::render_settings(&StreamOptions { framegen_on: false, ..Default::default() });
+    assert_eq!(off.gen_factor, 1.0, "off: the stream's own rate, nothing generated");
+    // no stored rate or old display rate changes what is asked for
+    for display_fps in [0u16, 30, 75, 144, u16::MAX] {
+        let r = video::render_settings(&StreamOptions { display_fps, ..Default::default() });
+        assert_eq!((r.gen_factor, r.display_hz), (0.0, video::AUTO_RATE_HZ), "display_fps {display_fps}");
     }
 }
 
@@ -502,7 +559,7 @@ fn invalid_options_must_not_reach_the_renderer() {
     let o = StreamOptions { display_fps: 65_535, sharpness: 255, saturation: 255, fps: 0, ..Default::default() };
     assert!(o.validate().is_err());
     let r = video::render_settings(&o);
-    let sane = [30u16, 60, 75, 120, 144].contains(&r.display_hz) && r.sharpness <= 2.0 && r.saturation <= 2.0;
+    let sane = r.display_hz == video::AUTO_RATE_HZ && r.sharpness <= 2.0 && r.saturation <= 2.0;
     assert!(sane, "the renderer would receive {r:?}");
 }
 
@@ -540,7 +597,7 @@ fn stream_options_validation_rejects_the_hostile_json_the_ipc_can_deliver() {
         ("display_fps", serde_json::json!(0)),
         ("display_fps", serde_json::json!(240)),
         ("frame_mode", serde_json::json!("")),
-        ("framegen", serde_json::json!("\u{202e}metalfx")),
+        ("engine", serde_json::json!("\u{202e}metalfx")),
         ("volume", serde_json::json!(101)),
         ("sharpness", serde_json::json!(201)),
         ("saturation", serde_json::json!(201)),

@@ -38,6 +38,8 @@ struct Shared {
     next_id: AtomicU32,
     queue: Ship<DispatchRetained<DispatchQueue>>,
     deadzone: Mutex<f64>,
+    /// Counts the console's motion-reset requests; each pad's sensor handler restarts its orientation when it sees a new value.
+    motion_reset: AtomicU32,
 }
 
 pub struct MacPads {
@@ -56,6 +58,7 @@ impl MacPads {
             next_id: AtomicU32::new(1),
             queue: Ship(queue),
             deadzone: Mutex::new(DEFAULT_DEADZONE),
+            motion_reset: AtomicU32::new(0),
         });
         unsafe {
             GCController::setShouldMonitorBackgroundEvents(false);
@@ -95,6 +98,11 @@ impl MacPads {
 
     pub fn set_deadzone(&self, dz: f64) {
         *self.shared.deadzone.lock().unwrap_or_else(PoisonError::into_inner) = dz.clamp(0.0, 0.5);
+    }
+
+    /// The console asked for the current position to be the motion origin: every pad's orientation starts over.
+    pub fn reset_motion(&self) {
+        self.shared.motion_reset.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Read every pad again and report its state. GameController delivers nothing while the app is in the background, so a button
@@ -171,9 +179,15 @@ unsafe fn start_motion(s: &Arc<Shared>, id: u32, c: &GCController) {
         m.setSensorsActive(true);
     }
     let tx = s.tx.clone();
-    let st = Mutex::new((Instant::now(), Orient::default()));
+    let shared = s.clone();
+    let st = Mutex::new((Instant::now(), Orient::default(), shared.motion_reset.load(Ordering::Relaxed)));
     let handler = RcBlock::new(move |m: NonNull<GCMotion>| {
         let mut g = st.lock().unwrap_or_else(PoisonError::into_inner);
+        let reset = shared.motion_reset.load(Ordering::Relaxed);
+        if reset != g.2 {
+            g.2 = reset;
+            g.1.reset();
+        }
         let now = Instant::now();
         let dt = now.duration_since(g.0);
         if dt < Duration::from_millis(8) {

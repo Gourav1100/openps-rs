@@ -11,6 +11,33 @@ use std::time::{Duration, Instant};
 /// makes it send several large IDRs back to back.
 pub const KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_millis(500);
 
+/// This many failed decodes in a row, with no picture in between, mean the decoder session itself is broken.
+pub const REBUILD_AFTER: u32 = 3;
+
+/// Counts decode failures that a keyframe request cannot fix.
+#[derive(Default, Debug)]
+pub struct FailureStreak(u32);
+
+impl FailureStreak {
+    /// A picture was shown.
+    pub fn ok(&mut self) {
+        self.0 = 0;
+    }
+
+    /// A decode failed. True when the session should be rebuilt (the streak then starts over).
+    pub fn failed(&mut self, e: &Error) -> bool {
+        if !matches!(e, Error::Decode(_) | Error::Session(_)) {
+            return false; // waiting for a keyframe is the normal state after loss, an empty unit is harmless
+        }
+        self.0 += 1;
+        if self.0 < REBUILD_AFTER {
+            return false;
+        }
+        self.0 = 0;
+        true
+    }
+}
+
 #[derive(Default)]
 pub struct Push {
     pub pictures: Vec<Frame>,
@@ -31,6 +58,7 @@ pub struct Pipeline {
     last_request: Option<Instant>,
     last_id: Option<u16>,
     output: OutputFormat,
+    failures: FailureStreak,
     pub counters: Counters,
 }
 
@@ -48,6 +76,7 @@ impl Pipeline {
             last_request: None,
             last_id: None,
             output: OutputFormat::Native,
+            failures: FailureStreak::default(),
             counters: Counters::default(),
         }
     }
@@ -96,6 +125,9 @@ impl Pipeline {
         let r = dec.decode_annex_b(&unit.data, i64::from(unit.id) * 1500);
         match r {
             Ok(pictures) => {
+                if !pictures.is_empty() {
+                    self.failures.ok();
+                }
                 self.counters.decoded += pictures.len() as u64;
                 Push { pictures, request_keyframe: false }
             }
@@ -103,6 +135,16 @@ impl Pipeline {
                 self.counters.dropped += 1;
                 if matches!(e, Error::Decode(_)) {
                     dec.reset();
+                }
+                if self.failures.failed(&e) {
+                    match dec.rebuild() {
+                        Ok(()) => log::warn!(
+                            "video decoder failed {REBUILD_AFTER} times in a row ({e:?}); rebuilt its session"
+                        ),
+                        Err(r) => {
+                            log::error!("video decoder failed repeatedly ({e:?}) and could not be rebuilt: {r:?}")
+                        }
+                    }
                 }
                 // `Empty` is harmless (a unit without pictures); everything else means we are blind until an IDR.
                 let want = !matches!(e, Error::Empty) && self.keyframe_due();
@@ -127,5 +169,43 @@ impl Pipeline {
         self.last_request = Some(now);
         self.counters.keyframe_requests += 1;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn three_failed_decodes_in_a_row_ask_for_a_rebuild_and_then_start_over() {
+        let mut s = FailureStreak::default();
+        assert!(!s.failed(&Error::Decode(-1)));
+        assert!(!s.failed(&Error::Decode(-1)));
+        assert!(s.failed(&Error::Session(-1)), "a dead session counts like a failed decode");
+        assert!(!s.failed(&Error::Decode(-1)), "the streak starts over after a rebuild");
+    }
+
+    #[test]
+    fn a_picture_in_between_clears_the_streak() {
+        let mut s = FailureStreak::default();
+        s.failed(&Error::Decode(-1));
+        s.failed(&Error::Decode(-1));
+        s.ok();
+        assert!(!s.failed(&Error::Decode(-1)));
+        assert!(!s.failed(&Error::Decode(-1)));
+        assert!(s.failed(&Error::Decode(-1)));
+    }
+
+    #[test]
+    fn waiting_for_a_keyframe_or_an_empty_unit_is_not_a_failure() {
+        let mut s = FailureStreak::default();
+        for _ in 0..10 {
+            assert!(!s.failed(&Error::NeedKeyframe));
+            assert!(!s.failed(&Error::Empty));
+        }
+        s.failed(&Error::Decode(-1));
+        s.failed(&Error::Decode(-1));
+        assert!(!s.failed(&Error::NeedKeyframe), "and it does not clear a streak either");
+        assert!(s.failed(&Error::Decode(-1)));
     }
 }

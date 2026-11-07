@@ -41,7 +41,7 @@ pub struct StreamConfig {
     pub haptics: bool,
     /// Count audio packets for congestion only; do not decrypt or decode them.
     pub disable_audio: bool,
-    /// `videoFrameBufferSize` (>= 2).
+    /// `videoFrameBufferSize` (>= 2); the original app's default is 2 (`FEW`).
     pub video_window: usize,
     /// Send congestion packets (bitrate mode AUTO/START).
     pub congestion: bool,
@@ -49,7 +49,7 @@ pub struct StreamConfig {
 
 impl Default for StreamConfig {
     fn default() -> Self {
-        Self { ps5: true, haptics: true, disable_audio: false, video_window: 3, congestion: true }
+        Self { ps5: true, haptics: true, disable_audio: false, video_window: 2, congestion: true }
     }
 }
 
@@ -348,6 +348,7 @@ impl Stream {
         let outcome = self.video.push(&unit);
         let after = self.video.cursor();
         if outcome == Outcome::DeliveredWithGap && after > 0 {
+            log::info!("video loss: frames {before}..{after} skipped at {now:.3} s, CORRUPT_FRAME sent");
             self.send_corrupt_frame(before, after);
         }
         if self.video.take_resync() {

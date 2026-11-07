@@ -2,9 +2,9 @@
 //! the look history with hostile / extreme inputs. No GPU needed.
 #![cfg(target_os = "macos")]
 use openps_metal::camera::CameraComp;
-use openps_metal::effective_rate;
 use openps_metal::look::{LookHistory, SharedLook};
 use openps_metal::timeline::{Timeline, MAX_ALPHA};
+use openps_metal::{effective_rate, effective_rate_with, settle_held_rate};
 use std::time::Instant;
 
 const I: f64 = 1.0 / 60.0;
@@ -232,6 +232,47 @@ fn effective_rate_property_over_every_request_and_realistic_and_hostile_refresh_
     }
 }
 
+#[test]
+fn a_held_rate_below_the_stream_rate_lands_on_a_whole_number_of_refreshes_on_a_fixed_display() {
+    // the measured defect: 45 on a 60 Hz screen alternated one and two refreshes (±8 ms, 40 late frames in 2 s)
+    assert_eq!(settle_held_rate(45, 60.0, 60.0, false), 30);
+    assert_eq!(settle_held_rate(40, 60.0, 144.0, false), 36);
+    assert_eq!(settle_held_rate(30, 60.0, 60.0, false), 30);
+    // a rate within a tenth of an even one is kept: 55 on 60 Hz doubles one picture in eleven
+    assert_eq!(settle_held_rate(55, 60.0, 60.0, false), 55);
+    // every rate the ladder can ask for ends up even, or within a tenth of the even rate above, and never faster than what the GPU holds
+    for refresh in [60.0, 120.0, 144.0, 59.94] {
+        for held in (15..60u16).step_by(5) {
+            let settled = settle_held_rate(held, 60.0, refresh, false);
+            let even = openps_metal::ladder::even_rate(held, refresh);
+            let above = refresh / ((refresh / f64::from(even)).round() - 1.0).max(1.0);
+            assert!(
+                settled == even || (settled == held && f64::from(held) >= 0.9 * above),
+                "{held}@{refresh}: {settled}"
+            );
+            assert!(settled <= held, "never faster than what the GPU holds");
+            let (_, k, capped) = effective_rate(even, refresh);
+            assert!(!capped && k >= 1, "{held}@{refresh}: {even} is not an even divisor");
+        }
+    }
+}
+
+#[test]
+fn a_variable_display_generated_rates_and_a_full_rate_are_left_alone() {
+    assert_eq!(settle_held_rate(45, 60.0, 144.0, true), 45, "variable refresh shows 45 as it is");
+    assert_eq!(settle_held_rate(120, 60.0, 144.0, false), 120, "generated frames are placed for their refresh");
+    assert_eq!(settle_held_rate(60, 60.0, 60.0, false), 60);
+    assert_eq!(settle_held_rate(59, 60.0, 60.0, false), 59, "a rate a hair under the stream's is not thinned");
+}
+
+#[test]
+fn an_unknown_refresh_rate_never_turns_into_a_request_for_240() {
+    for refresh in [0.0, -1.0, f64::NAN, 0.5] {
+        assert_eq!(settle_held_rate(240, 60.0, refresh, false), 120, "{refresh}");
+        assert_eq!(settle_held_rate(45, 60.0, refresh, false), 45, "{refresh}");
+    }
+}
+
 /// With every refresh rate the app allows (30/60/75/120/144 requested, see `StreamOptions::validate`) the scheduler asks for a sane
 /// number of refreshes per frame.
 #[test]
@@ -310,4 +351,24 @@ fn non_finite_interval_and_clock_do_not_poison_the_timeline() {
     let t = steady(&mut tl, 0, 100, 1.0);
     assert_eq!(tl.alpha(f64::NAN), 0.0);
     assert!(tl.alpha(t).is_finite());
+}
+
+#[test]
+fn running_above_the_displays_rate_keeps_the_rate_and_paces_it_by_our_own_clock() {
+    // off: the display's rate is the limit, as ever
+    assert_eq!(effective_rate_with(240, 60.0, false), effective_rate(240, 60.0));
+    assert_eq!(effective_rate_with(240, 60.0, false), (60.0, 1, false));
+    // on: a rate above the refresh rate is kept and scheduled for its own moments (capped = true)
+    assert_eq!(effective_rate_with(240, 60.0, true), (240.0, 1, true));
+    assert_eq!(effective_rate_with(120, 60.0, true), (120.0, 1, true));
+    assert_eq!(effective_rate_with(75, 60.0, true), (75.0, 1, true));
+    // at or below the refresh rate nothing changes (an even divisor is still held for whole refreshes)
+    for r in [60u16, 59, 30, 20, 45] {
+        assert_eq!(effective_rate_with(r, 60.0, true), effective_rate(r, 60.0), "{r}");
+    }
+    assert_eq!(effective_rate_with(144, 144.0, true), (144.0, 1, false));
+    // an unknown refresh rate never makes it faster
+    for refresh in [0.0, -1.0, f64::NAN] {
+        assert_eq!(effective_rate_with(240, refresh, true), effective_rate(240, refresh), "{refresh}");
+    }
 }

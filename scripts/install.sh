@@ -6,6 +6,8 @@
 # The PSN client constants and key tables are compiled in; the two files below are only OVERRIDES. PSN sign-in is always built in.
 # DEFAULT: if ./openps-data/psn.json and/or ./openps-data/tables.json exist (inside this project, git-ignored) they are used
 # automatically, so a plain `scripts/install.sh` installs a ready-to-pair app with PSN enabled.
+# The same folder can hold input.toml and game-keymaps.json (your key map and which game uses which profile): a FRESH install starts
+# with them, and an existing key map in the app is never overwritten (to replace it, delete it from the app's data folder first).
 # With these the app finds its credentials when double-clicked: no environment variables needed.
 # Re-installing keeps the app's data (pairings, settings, credentials).
 # Default destination: ./install inside this project (nothing outside the project is touched). Use --dest ~/Applications
@@ -67,8 +69,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>openps-app</string>
 <key>CFBundleIconFile</key><string>icon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>${version:-0.2.0}</string>
-<key>CFBundleVersion</key><string>${version:-0.2.0}</string>
+<key>CFBundleShortVersionString</key><string>${version:-0.3.0}</string>
+<key>CFBundleVersion</key><string>${version:-0.3.0}</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
@@ -82,6 +84,11 @@ if [[ -n $keep ]]; then mv "$keep/openps-data" "$data"; rmdir "$keep"; else mkdi
 chmod 700 "$data"
 [[ -z $psncfg ]] || { install -m 600 "$psncfg" "$data/psn.json"; echo "credentials: $data/psn.json"; }
 [[ -z $tables ]] || { install -m 600 "$tables" "$data/tables.json"; echo "key tables:  $data/tables.json"; }
+if (( ! nocreds )); then
+  for f in input.toml game-keymaps.json; do
+    if [[ -f openps-data/$f && ! -e $data/$f ]]; then install -m 600 "openps-data/$f" "$data/$f"; echo "key map:     $data/$f (from ./openps-data)"; fi
+  done
+fi
 # ad-hoc signature so macOS runs the bundle on this Mac (not a Developer ID signature: not for distribution)
 codesign --force --deep --sign - "$app" >/dev/null 2>&1 || echo "note: ad-hoc signing failed; the app may need right-click > Open the first time"
 echo

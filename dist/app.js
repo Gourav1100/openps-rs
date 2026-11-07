@@ -87,17 +87,36 @@ function renderLog() {
 }
 
 // ---- toasts ---------------------------------------------------------------------------------------------------------
+// Every message leaves with a short fade (see `.leaving` in the style sheet) instead of vanishing. Showing the same element again cancels the
+// fade, so a message that comes back while it is leaving is not removed behind the new text.
+function fadeOut(node, done) {
+  if (!node || node.hidden || node.classList.contains("leaving")) return;
+  const token = (node._fade = {});
+  node.classList.add("leaving");
+  const end = () => {
+    if (node._fade !== token) return;
+    node._fade = null;
+    node.classList.remove("leaving");
+    done?.();
+  };
+  node.addEventListener("animationend", end, { once: true });
+  setTimeout(end, 520); // the animation may not run (hidden tab, reduced motion): never leave the message behind
+}
+function unfade(node) {
+  node._fade = null;
+  node.classList.remove("leaving");
+}
 function toast(message, kind = "info", ms = kind === "error" ? 12000 : 4000) {
   const box = $("toasts");
   const t = el("div", { className: "toast", dataset: { kind }, attrs: kind === "error" ? { role: "alert" } : {} }, svg(kind === "error" ? "alert" : kind === "ok" ? "check" : "info"), el("p", { textContent: message }));
   const close = el("button", { type: "button", attrs: { "aria-label": "Dismiss" } }, svg("close"));
   let timer = 0;
-  const remove = () => { clearTimeout(timer); t.remove(); };
+  const remove = () => { clearTimeout(timer); fadeOut(t, () => t.remove()); };
   const arm = () => { clearTimeout(timer); timer = setTimeout(remove, ms); };
   close.onclick = remove;
   t.append(close);
   box.append(t);
-  while (box.children.length > 3) box.firstChild.remove();
+  while (box.querySelectorAll(".toast:not(.leaving)").length > 3) { const old = box.querySelector(".toast:not(.leaving)"); fadeOut(old, () => old.remove()); }
   // top layer: stays above any open modal dialog; re-shown so it also sits above a dialog opened later
   try { if (box.matches(":popover-open")) box.hidePopover(); box.showPopover(); } catch { /* no popover support: z-index fallback */ }
   arm();
@@ -831,7 +850,7 @@ $("games-track").addEventListener("keydown", (ev) => {
 });
 
 let lastAutoRefresh = 0;
-async function loadLibrary(refresh = false) {
+async function loadLibrary(refresh = false, quiet = false) {
   if (!S.psnApi?.signed_in) { S.lib = null; libBuilt = ""; renderShelf(); buildGames(); syncGames(); return; }
   const [e, r] = await call("psn_library", { refresh });
   if (e) { log(`games: ${e}`, "error"); return; }
@@ -839,11 +858,24 @@ async function loadLibrary(refresh = false) {
     S.lib = { library: r.library, fetched_at: r.fetched_at };
     renderShelf(); buildGames();
   }
-  if (r.error) { log(`games: ${r.error}`, "error"); if (refresh) toast("Could not update your games. Showing the saved list.", "error", 5000); }
+  if (r.error) { log(`games: ${r.error}`, "error"); if (refresh && !quiet) toast("Could not update your games. Showing the saved list.", "error", 5000); }
   syncGames();
   // show what is saved at once, then bring it up to date quietly, but only when the saved list is stale and not in a loop
   if (!refresh && (!S.lib || Date.now() / 1000 - (S.lib.fetched_at || 0) > 600) && Date.now() - lastAutoRefresh > 60000) { lastAutoRefresh = Date.now(); loadLibrary(true); }
 }
+// The games and trophies refresh themselves, quietly: a few seconds after a session ends (what was played is new data) and whenever the list is
+// 5 minutes old (checked every 30 s, only while the app is visible and no stream is running, so a stream never competes with it).
+const LIB_AUTO_AGE_S = 5 * 60;
+let libAutoBusy = false;
+async function autoRefreshLibrary() {
+  if (libAutoBusy || !S.psnApi?.signed_in) return;
+  libAutoBusy = true;
+  try { await loadLibrary(true, true); } finally { libAutoBusy = false; }
+}
+setInterval(() => {
+  if (document.hidden || SESSION_BUSY.includes(S.session.state) || !S.lib) return;
+  if (Date.now() / 1000 - (S.lib.fetched_at || 0) >= LIB_AUTO_AGE_S) autoRefreshLibrary();
+}, 30000);
 $("games-refresh").onclick = async () => {
   setLoading($("games-refresh"), true);
   await loadLibrary(true);
@@ -895,11 +927,13 @@ function showBanner(msg, retryFor) {
   const x = el("button", { type: "button", className: "btn btn-ghost btn-sm btn-icon", attrs: { "aria-label": "Dismiss" } }, svg("close"));
   x.onclick = hideBanner;
   b.append(x);
+  unfade(b);
   b.hidden = false;
   log(raw === msg ? msg : `${msg} (${raw})`, "error");
 }
 function hideBanner() {
-  $("banner").hidden = true;
+  const b = $("banner");
+  fadeOut(b, () => { b.hidden = true; });
 }
 // Non-blocking, dismissible notice (e.g. a damaged data file was set aside). Separate from the error banner so it is never cleared by navigation.
 const NOTICE_SEEN = new Set();
@@ -910,9 +944,10 @@ function showNotice(kind, detail) {
   const n = $("notice");
   const title = kind === "data_damaged" ? "A data file was damaged and has been set aside" : "Notice";
   const x = el("button", { type: "button", className: "btn btn-ghost btn-sm btn-icon", attrs: { "aria-label": "Dismiss notice" } }, svg("close"));
-  x.onclick = () => { n.hidden = true; n.replaceChildren(); };
+  x.onclick = () => fadeOut(n, () => { n.hidden = true; n.replaceChildren(); });
   const text = el("span", {}, el("strong", { textContent: title }), el("br"), document.createTextNode(detail));
   n.replaceChildren(svg("info"), text, x);
+  unfade(n);
   n.hidden = false;
   log(`${title}: ${detail}`, "error");
 }
@@ -1184,6 +1219,23 @@ function rovingFocus(group) {
     ev.preventDefault();
   };
 }
+// An option may carry a third entry: a small badge shown above its label (for example the resolution an upscaling multiple gives).
+// An empty badge takes no room, so the options of one row keep their height.
+function paintSegLabel(b, label, sub) {
+  if (sub === undefined) {
+    if (b.textContent !== label || b.firstElementChild) b.textContent = label;
+    return;
+  }
+  let tag = b.querySelector(".seg-sub"), text = b.querySelector(".seg-label");
+  if (!tag || !text) {
+    b.textContent = "";
+    tag = el("span", { className: "seg-sub" });
+    text = el("span", { className: "seg-label" });
+    b.append(tag, text);
+  }
+  if (text.textContent !== label) text.textContent = label;
+  if (tag.textContent !== sub) tag.textContent = sub;
+}
 function buildSeg(box, options, value, onChange, disabled = () => false, why = "") {
   const same = box.children.length === options.length && options.every(([v], i) => box.children[i].dataset.v === String(v));
   if (!same) {
@@ -1197,9 +1249,9 @@ function buildSeg(box, options, value, onChange, disabled = () => false, why = "
     }
     if (keep !== null) box.querySelector(`[data-v="${CSS.escape(keep)}"]`)?.focus();
   }
-  options.forEach(([v, label], i) => {
+  options.forEach(([v, label, sub], i) => {
     const b = box.children[i], off = !!disabled(v);
-    b.textContent !== label && (b.textContent = label);
+    paintSegLabel(b, label, sub);
     b.setAttribute("aria-checked", String(v === value));
     b.setAttribute("aria-disabled", String(off));
     if (off && why) b.title = why; else b.removeAttribute("title");
@@ -1260,8 +1312,8 @@ async function renderControllerSettings() {
   }));
 }
 function paintControllerMode() {
-  const keyboardMode = S.input.mapping;
-  $("map-text").textContent = keyboardMode ? "Keyboard + mouse" : "Controller";
+  // The tile always says "Controls"; its picture shows what is in use: a mouse for keyboard and mouse, a controller otherwise.
+  $("map-btn").querySelector("use")?.setAttribute("href", S.input.mapping ? "#i-mouse" : "#i-gamepad");
 }
 $("controller-deadzone").addEventListener("input", () => {
   $("controller-deadzone-out").textContent = `${Math.round(Number($("controller-deadzone").value) * 100)}%`;
@@ -1279,8 +1331,116 @@ $("controller-deadzone").addEventListener("change", async () => {
   }
   S.controller.deadzone = applied;
 });
+// Rumble and adaptive-trigger strength: a stepper each (10 % a step) and a Test button on its right. Saved like every setting; the test
+// waits for the save so it is felt at the new strength.
+const TUNING = [
+  { id: "rumble", key: "rumble_pct", min: 0, max: 200, test: "rumble", what: "rumble" },
+  { id: "trigger", key: "trigger_pct", min: 0, max: 100, test: "trigger", what: "adaptive trigger" },
+];
+// A test runs for as long as the backend says (it answers with the length in ms); both Test buttons stay disabled until it is over, because
+// a second test would cut the first one short. The clicked one shows a spinner.
+let controllerTesting = false;
+async function runControllerTest(t) {
+  if (controllerTesting) return;
+  controllerTesting = true;
+  const buttons = TUNING.map((x) => $(`${x.id}-test`)), mine = $(`${t.id}-test`);
+  const finish = () => { controllerTesting = false; for (const b of buttons) setLoading(b, false); };
+  for (const b of buttons) { b.disabled = true; }
+  setLoading(mine, true);
+  await saveChain; // feel it at the strength that was just set
+  const [e, ms] = await call("controller_test", { kind: t.test });
+  if (e) { finish(); toast(String(e), "info", 5000); return; }
+  setTimeout(finish, Number(ms) + 200);
+}
+function drawTuning() {
+  const s = S.settings;
+  for (const t of TUNING) {
+    const v = s[t.key] ?? 100;
+    $(`${t.id}-out`).textContent = `${v}%`;
+    $(`${t.id}-meter`).style.setProperty("--v", String(v / t.max));
+    $(`${t.id}-dec`).disabled = v <= t.min;
+    $(`${t.id}-inc`).disabled = v >= t.max;
+    $(`${t.id}-dec`).onclick = () => save({ [t.key]: Math.max(t.min, v - 10) });
+    $(`${t.id}-inc`).onclick = () => save({ [t.key]: Math.min(t.max, v + 10) });
+    $(`${t.id}-test`).onclick = () => runControllerTest(t);
+  }
+}
+// The stream bar's Immersion button is the same saved setting as the switch in Settings (so it is permanent), shown only where the GPU
+// renderer is. Pressing it says what it did, like the other switches in the stream.
+function paintImmersion() {
+  const b = $("imm-btn"), on = !!S.settings?.immersion;
+  b.hidden = !S.info.metal;
+  b.setAttribute("aria-pressed", String(on));
+  b.title = on ? "Immersion is on: the black bars are filled. Click to turn it off." : "Immersion is off. Click to fill the black bars with a soft glow of the picture.";
+}
+$("imm-btn").onclick = async () => {
+  if (!S.settings) await renderSettings();
+  if (!S.settings) return;
+  const on = !S.settings.immersion;
+  save({ immersion: on }, true);
+  toast(on ? "Immersion on" : "Immersion off", "info", 2000);
+};
+// Leave sits just right of the centred bar: tell the style sheet how wide the bar is (it depends on the captions and the tools shown).
+{
+  const bar = document.querySelector(".hud-bottom"), hud = $("hud");
+  const sync = () => hud.style.setProperty("--bar-w", `${bar.offsetWidth}px`);
+  new ResizeObserver(sync).observe(bar);
+  sync();
+}
+// Debug tools (Settings -> Display -> Debug tools): the Engine button and its panel switch the engine on the running stream. They are the
+// same saved setting as in Settings, so what is chosen here stays chosen.
+function closeEnginePop() {
+  $("engine-pop").hidden = true;
+  $("engine-btn").setAttribute("aria-pressed", "false");
+  $("engine-btn").setAttribute("aria-expanded", "false");
+}
+function paintEnginePop() {
+  paintDebugBar();
+  const s = S.settings;
+  const on = !!s?.debug && (!!S.info.metal || !!S.info.fsr);
+  $("engine-btn").hidden = !on;
+  if (!on) { closeEnginePop(); return; }
+  buildSeg(document.querySelector('[data-hud="engine"]'), [["metalfx", "MetalFX"], ["fsr", "FSR"]], s.engine === "fsr" ? "fsr" : "metalfx", (v) => save({ engine: v }, true), (v) => (v === "fsr" ? !S.info.fsr : !S.info.metal), "Not available on this Mac");
+  // the upscaling resolution, live: the multiple of the stream's size the picture is made at (then scaled to fit the window)
+  const upTo = (f) => `${Math.round((s.height * f) / 2) * 2}p`;
+  buildSeg(document.querySelector('[data-hud="upscale"]'), [["off", "Off", ""], ["1.33x", "1.33×", upTo(4 / 3)], ["1.5x", "1.5×", upTo(1.5)], ["2x", "2×", upTo(2)]], s.upscale || "off", (v) => save({ upscale: v }, true));
+}
+// what is really doing the work now (from the renderer's statistics), so a choice can be judged
+function engineNow(r) {
+  const finish = [r.linear_active && !r.fsr_active && "linear light", r.rcas_active && "adaptive sharpening"].filter(Boolean).join(" + ");
+  const up = r.upscaled ? `${r.fsr_active ? "FSR" : "MetalFX"} to ${r.upscale_height}p${finish ? ` (${finish})` : ""}` : "not upscaling";
+  const fg = !r.generating ? "none" : r.metalfx_active ? "MetalFX" : "our interpolator";
+  const a = r.adaptive || {};
+  const rate = a.on && a.cap_hz ? ` Frame rate held to ${a.cap_hz} fps (asked for ${Math.round(a.asked_hz)}) because the GPU is too busy.` : "";
+  return `In use now: upscaling ${up}; generated frames ${fg}.${rate}`;
+}
+$("engine-btn").onclick = async () => {
+  if (!S.settings) await renderSettings();
+  const open = $("engine-pop").hidden;
+  if (!open) { closeEnginePop(); return; }
+  paintEnginePop();
+  $("engine-pop").hidden = false;
+  $("engine-btn").setAttribute("aria-pressed", "true");
+  $("engine-btn").setAttribute("aria-expanded", "true");
+};
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("engine-pop").hidden) closeEnginePop(); });
+// What each engine is, said at the Settings field (FSR is the part of AMD's FSR family that can work on a finished video picture).
+// the rate really shown while the adaptive limit applies: the limit, or lower when a fixed-refresh display can only show a divisor of its refresh rate evenly
+function heldRate(r) {
+  const cap = r.adaptive.cap_hz, target = Math.round(r.target_hz);
+  return target > 0 && target < cap ? target : cap;
+}
+
+function paintEngineHint(s) {
+  if ($("engine-field").hidden) return;
+  $("engine-hint").textContent = s.engine === "fsr"
+    ? "AMD FidelityFX Super Resolution 1 (EASU), ported to Metal: an edge-adaptive upscaler that works on the finished picture, followed by the same sharpening as MetalFX. It has no linear-light mode. FSR only upscales: in Smooth mode at about 2× (60 to 120) MetalFX's frame generation still makes the in-between frame, and our own interpolator makes the frames at other rates. FSR 3 and FSR 4 need the game's depth, motion vectors and jitter, which a video stream does not carry, so only FSR 1 is offered; the details are in the user guide."
+    : "MetalFX is Apple's GPU upscaler. In Smooth mode at about 2× (60 to 120) it also makes the in-between frame; our own interpolator makes the frames at other rates.";
+}
+
 function drawSettings() {
   const s = S.settings;
+  drawTuning();
   const hevcOk = S.info.hevc;
   buildSeg(document.querySelector('[data-setting="height"]'), [[360, "360p"], [540, "540p"], [720, "720p"], [1080, "1080p"]], s.height, (v) => save({ height: v }));
   buildSeg(document.querySelector('[data-setting="bitrate"]'), [[-1, "Auto"], [2000, "2 Mbit/s"], [6000, "6 Mbit/s"], [10000, "10 Mbit/s"], [15000, "15 Mbit/s"]], s.bitrate, (v) => save({ bitrate: v }));
@@ -1289,54 +1449,80 @@ function drawSettings() {
     : `Fixed: the console is asked for ${s.bitrate / 1000} Mbit/s.`;
   buildSeg(document.querySelector('[data-setting="codec"]'), [["hevc", "HEVC (H.265)"], ["h264", "H.264"]], s.hevc ? "hevc" : "h264", (v) => save({ hevc: v === "hevc", ...(v === "hevc" ? {} : { hdr: false }) }), (v) => v === "hevc" && !hevcOk, "This device cannot decode HEVC");
   $("codec-hint").textContent = hevcOk ? "HEVC looks better at the same bitrate. H.264 is the compatible fallback." : "This device cannot decode HEVC in hardware, so H.264 is used.";
-  // display: upscaling, frame rate, how extra frames are made, camera compensation
+  // display: upscaling, the engine, each picture filter with its own switch, the frame rate, how extra frames are made, camera compensation
   const hz = Math.round(S.info.display_hz || 0);
-  const metal = !!S.info.metal;
-  $("metal-chip").hidden = !metal;
-  buildSeg(document.querySelector('[data-setting="upscale"]'), [["off", "Off"], ["1440p", "Up to 1440p"], ["2160p", "Up to 4K"]], s.upscale || "off", (v) => save({ upscale: v }), (v) => v !== "off" && !metal, "Needs a GPU upscaler, not available on this device");
-  // sharpness and saturation sliders (percent). Applied when you let go; the number follows the slider while you drag.
-  const upscaled = (s.upscale || "off") !== "off" && metal;
+  const metal = !!S.info.metal, fsrOk = !!S.info.fsr, gpuOk = metal || fsrOk;
+  $("metal-chip").hidden = !gpuOk;
+  // each multiple shows the size it draws for the resolution chosen above (rounded to an even number of lines)
+  const upTo = (f) => `${Math.round((s.height * f) / 2) * 2}p`;
+  buildSeg(document.querySelector('[data-setting="upscale"]'), [["off", "Off", ""], ["1.33x", "1.33×", upTo(4 / 3)], ["1.5x", "1.5×", upTo(1.5)], ["2x", "2×", upTo(2)]], s.upscale || "off", (v) => save({ upscale: v }), (v) => v !== "off" && !gpuOk, "Needs a GPU upscaler, not available on this device");
+  const engine = s.engine === "fsr" ? "fsr" : "metalfx";
+  $("engine-field").hidden = !gpuOk;
+  if (gpuOk) buildSeg(document.querySelector('[data-setting="engine"]'), [["metalfx", "MetalFX"], ["fsr", "FSR"]], engine, (v) => save({ engine: v }), (v) => (v === "fsr" ? !fsrOk : !metal), "Not available on this Mac");
+  paintEngineHint(s);
+  const upscaled = (s.upscale || "off") !== "off" && gpuOk;
+  // Every filter has its own switch; its slider keeps its value while the filter is off. Sliders are in percent and apply when you let go;
+  // the number follows the slider while you drag.
+  const lin = s.linear_light !== false;
+  setSwitch("linear-switch", lin, (on) => save({ linear_light: on }), upscaled && engine === "metalfx", engine === "fsr" ? "FSR has no linear-light mode" : "Needs upscaling: turn it on above");
+  $("linear-hint").textContent = engine === "fsr" ? "FSR works on the picture as it is and has no linear-light mode."
+    : !upscaled ? "Needs upscaling: turn it on above."
+    : lin ? "The MetalFX scaler works in linear light: more accurate colour and edges (measured closer to the real picture at every bitrate) for a little more GPU time."
+    : "Off: the MetalFX scaler's perceptual mode.";
+  const sharpOn = s.sharpness_on !== false;
+  setSwitch("sharp-switch", sharpOn, (on) => save({ sharpness_on: on }), gpuOk, "Needs the GPU, not available on this device");
   rangeSetting("sharp-range", "sharp-out", "sharp-reset", s.sharpness ?? 60, 60, (v) => save({ sharpness: v }));
-  $("sharp-hint").textContent = upscaled
-    ? "In percent: 0 is a plain smooth enlargement, 100 is the upscaler as it draws it, above 100 is sharper than that. The upscaler adds more edge contrast than the real picture has; about 50 is closest to it."
+  setRangeEnabled("sharp", sharpOn && gpuOk);
+  $("sharp-hint").textContent = !sharpOn ? (upscaled ? "Off: the picture as the upscaler draws it, with no blend with a plain enlargement." : "Off: the picture is neither sharpened nor softened.")
+    : upscaled && engine === "fsr" ? "In percent: 0 is a plain smooth enlargement, 100 is FSR's EASU as it draws it, above 100 is sharper than that. FSR's edges are not over-sharpened the way MetalFX's are, so 100 leaves them as designed."
+    : upscaled ? "In percent: 0 is a plain smooth enlargement, 100 is the upscaler as it draws it, above 100 is sharper than that. The upscaler adds more edge contrast than the real picture has; about 60 (the default) is closest to it, and a light adaptive sharpening keeps it crisp there."
     : "In percent: 50 leaves the picture as it is, above sharpens, below softens.";
+  const rcasOn = s.rcas_on !== false;
+  setSwitch("rcas-switch", rcasOn, (on) => save({ rcas_on: on }), gpuOk, "Needs the GPU, not available on this device");
+  rangeSetting("rcas-range", "rcas-out", "rcas-reset", s.rcas ?? 100, 100, (v) => save({ rcas: v }));
+  setRangeEnabled("rcas", rcasOn && upscaled);
+  $("rcas-hint").textContent = !gpuOk ? "Needs the Metal renderer."
+    : !upscaled ? "Needs upscaling: turn it on above. It sharpens the upscaled picture."
+    : !rcasOn ? "Off: the upscaled picture is not sharpened beyond the sharpness setting."
+    : `Adaptive sharpening (AMD's RCAS) puts back crisp edges that the sharpness blend takes out, and leaves flat areas and noise alone. 0 is off, 100 % is the strength that measured closest to the real picture with MetalFX at sharpness 60 %, 200 % is twice that.${engine === "fsr" ? " FSR is made to be followed by RCAS." : ""}`;
+  const satOn = s.saturation_on !== false;
+  setSwitch("sat-switch", satOn, (on) => save({ saturation_on: on }), true);
   rangeSetting("sat-range", "sat-out", "sat-reset", s.saturation ?? 100, 100, (v) => save({ saturation: v }));
-  $("upscale-hint").textContent = metal ? "Sharper than the stream's own resolution, drawn by the GPU. It only helps when the window is larger than the stream." : "Hardware upscaling is not available on this device.";
-  // Frame generation is a multiple of the stream's own rate: Off shows the stream as it comes, the others generate frames up to that multiple
-  // (never above what the display can show). Settings saved before this existed carry a display rate: it becomes the nearest multiple.
+  setRangeEnabled("sat", satOn);
+  $("sat-hint").textContent = satOn ? "100 % is the picture as the console sends it. Higher is more vivid, lower is paler." : "Off: the picture as the console sends it.";
+  $("upscale-hint").textContent = gpuOk ? `Draws the picture larger than the stream's own ${s.height}p, using the GPU. The badge on each option is the size it gives for the resolution chosen above. The picture is made at that size even when the screen is smaller, and then scaled down to fit the window, which usually looks better than upscaling only to the window's size (it costs more GPU time the larger it is).` : "Hardware upscaling is not available on this device.";
+  // Frame generation has no rate to choose: it fills the display's refresh rate (the console streams 60, the rest are made here), and the
+  // adaptive frame rate steps it down in steps of 5 fps when this Mac cannot keep it up with every filter on.
   const nativeHz = 60; // the stream always runs at 60: what the game does not render is dropped as repeats, and at least 30 frames a second are kept
-  const FACTORS = [[10, "Off"], [15, "1.5×"], [20, "2×"], [25, "2.5×"], [30, "3×"]];
-  let factor = s.frame_gen || 0;
-  if (!factor) {
-    const ratio = (s.display_fps || nativeHz) / nativeHz;
-    factor = FACTORS.reduce((best, [v]) => (Math.abs(v / 10 - ratio) < Math.abs(best / 10 - ratio) ? v : best), 10);
-    save({ frame_gen: factor }, true);
-  }
-  const want = Math.round(nativeHz * factor / 10);
-  buildSeg(document.querySelector('[data-setting="frame_gen"]'), FACTORS, factor, (v) => save({ frame_gen: v }),
-    (v) => v > 10 && (!metal || (hz >= 1 && nativeHz * v / 10 > hz + 1)),
-    metal ? `Your display refreshes at ${hz} Hz, so it cannot show more than ${hz} frames per second` : "Needs the GPU, not available on this device");
-  const eff = effectiveRate(want, S.info.display_hz || 0);
-  $("fps-hint").textContent = factor <= 10
-    ? `Frames are shown as they arrive from the console (${nativeHz} per second). Choose a multiple for extra generated frames.`
-    : !(hz >= 1) ? `The console sends ${nativeHz} frames per second; frames are generated up to ${want} per second.`
-    : eff.capped ? `${nativeHz} → ${want} frames per second: the console sends ${nativeHz}, the rest are generated here. Your display refreshes at ${hz} Hz, so without variable refresh some frames stay on screen one refresh and some two.`
-    : `${nativeHz} → ${Math.round(eff.hz)} frames per second: the console sends ${nativeHz}, the rest are generated here. Each is held for ${eff.k} refresh${eff.k > 1 ? "es" : ""} of your ${hz} Hz display.`;
-  if (factor > 10) $("fps-hint").textContent += "";
-  const gen = factor > 10;
-  buildSeg(document.querySelector('[data-setting="frame_mode"]'), [["smooth", "Smooth"], ["zero_latency", "Low latency"]], s.frame_mode || "smooth", (v) => save({ frame_mode: v }), () => !gen, "Only used when the display rate is above the stream rate");
-  $("mode-hint").textContent = !gen ? `Only used when the display rate is above the stream's ${nativeHz}.` : (s.frame_mode === "smooth" ? "Interpolated between real frames: the smoothest picture. It adds about one frame of delay (17 ms at 60 fps), which is still low enough to feel responsive; camera prediction hides most of it when you look around." : "Lowest delay: real frames are shown the instant they arrive and extra frames are predicted forward. Nothing is added, but fast edges can show small artifacts.");
-  // Apple's MetalFX interpolator, offered when this Mac has it. Measured on real footage it is a little less accurate and costs more GPU time
-  // than the built-in one, so it is opt-in; it only applies to Smooth mode at about twice the source rate (60 -> 120).
-  $("framegen-field").hidden = !S.info.metalfx;
-  if (S.info.metalfx) {
-    buildSeg(document.querySelector('[data-setting="framegen"]'), [["builtin", "Built-in"], ["metalfx", "MetalFX"]], s.framegen || "builtin", (v) => save({ framegen: v }), () => !gen || s.frame_mode !== "smooth", "Only used by Smooth mode with generated frames");
-    $("framegen-hint").textContent = s.frame_mode !== "smooth" || !gen
-      ? "Used by Smooth mode when the display rate is about twice the stream's (for example 60 to 120)."
-      : s.framegen === "metalfx"
-        ? "Apple's MetalFX makes the in-between frame (used at about 2×, where every generated frame is a midpoint; other multiples use the built-in one). In our tests it kept good structure but was less accurate than the built-in one and costs 4 to 12 ms of GPU time per frame. It is never switched off by itself."
-        : "Our own interpolator: the most accurate and the lightest in our tests on real video. This is the recommended choice.";
-  }
+  const fgOn = s.framegen_on !== false;
+  setSwitch("fg-switch", fgOn, (on) => save({ framegen_on: on }), gpuOk, "Needs the GPU, not available on this device");
+  const eff = effectiveRate(240, S.info.display_hz || 0);
+  const adaptive = s.adaptive_fps !== false;
+  const fallback = adaptive ? " If this Mac cannot keep that up with every filter on, the rate is lowered automatically, gently and in steps of 5 fps (see Adaptive frame rate)." : "";
+  $("fps-hint").textContent = !gpuOk ? "Needs the GPU, not available on this device."
+    : !fgOn ? `Frames are shown as they arrive from the console (${nativeHz} per second). Turn it on to have frames made here to fill your display.`
+    : !(hz >= 1) ? `Frames are generated to fill your display; the console sends ${nativeHz} per second.${fallback}`
+    : hz <= nativeHz && uncap ? `Your display refreshes at ${hz} Hz, but frames are made at up to 240 per second (Run above the display's refresh rate): the screen shows the newest one at each refresh.${fallback}`
+    : hz <= nativeHz ? `Your display refreshes at ${hz} Hz, which the stream's ${nativeHz} already fills, so nothing is generated. For a lower delay, turn on Run above the display's refresh rate.`
+    : eff.capped ? `${nativeHz} → ${hz} frames per second to fill your ${hz} Hz display: the console sends ${nativeHz}, the rest are generated here. Without variable refresh some frames stay on screen one refresh and some two.${fallback}`
+    : `${nativeHz} → ${Math.round(eff.hz)} frames per second to fill your ${hz} Hz display: the console sends ${nativeHz}, the rest are generated here.${fallback}`;
+  const uncap = !!s.uncapped_rate;
+  const gen = fgOn && gpuOk && (uncap || !(hz >= 1 && hz <= nativeHz));
+  buildSeg(document.querySelector('[data-setting="frame_mode"]'), [["smooth", "Smooth"], ["zero_latency", "Low latency"]], s.frame_mode || "smooth", (v) => save({ frame_mode: v }), () => !gen, "Only used when frames are generated");
+  $("mode-hint").textContent = !gen ? `Only used when frames are generated (frame generation on, and a display above the stream's ${nativeHz} Hz).` : (s.frame_mode === "smooth" ? "Interpolated between real frames: the smoothest picture. It adds about one frame of delay (17 ms at 60 fps), which is still low enough to feel responsive; camera prediction hides most of it when you look around." : "Lowest delay: real frames are shown the instant they arrive and extra frames are predicted forward. Nothing is added, but fast edges can show small artifacts.");
+  setSwitch("adapt-switch", s.adaptive_fps !== false, (on) => save({ adaptive_fps: on }), gpuOk, "Needs the GPU, not available on this device");
+  setSwitch("buffer-switch", s.pacing_buffer !== false, (on) => save({ pacing_buffer: on }), gpuOk && s.frame_mode !== "zero_latency", gpuOk ? "Only used in Smooth mode" : "Needs the GPU, not available on this device");
+  setSwitch("uncap-switch", uncap, (on) => save({ uncapped_rate: on }), gpuOk && fgOn, gpuOk ? "Needs frame generation" : "Needs the GPU, not available on this device");
+  const dbg = $("debug-switch");
+  dbg.setAttribute("aria-checked", String(!!s.debug));
+  dbg.onclick = () => save({ debug: !s.debug });
+  paintEnginePop();
+  const imm = $("imm-switch");
+  imm.setAttribute("aria-checked", String(!!s.immersion));
+  imm.setAttribute("aria-disabled", String(!metal));
+  imm.title = metal ? "" : "Needs the GPU, not available on this device";
+  imm.onclick = () => { if (metal) save({ immersion: !s.immersion }); };
+  paintImmersion();
   const cam = $("cam-switch");
   cam.setAttribute("aria-checked", String(!!s.camera_comp));
   cam.setAttribute("aria-disabled", String(!metal));
@@ -1371,6 +1557,20 @@ function rangeSetting(rangeId, outId, resetId, value, dflt, onFinal) {
   r.oninput = () => { o.textContent = `${r.value} %`; };
   r.onchange = () => onFinal(Number(r.value));
   $(resetId).onclick = () => { r.value = String(dflt); o.textContent = `${dflt} %`; onFinal(dflt); };
+}
+// A filter's slider can be used only while its switch is on (and its needs are met); it keeps its value while off.
+function setRangeEnabled(prefix, enabled) {
+  $(`${prefix}-range`).disabled = !enabled;
+  $(`${prefix}-reset`).disabled = !enabled;
+  $(`${prefix}-field`)?.classList.toggle("is-off", !enabled);
+}
+// A switch (a button with role=switch): its state, whether it can be used (and why not), and what flipping it does.
+function setSwitch(id, on, onToggle, usable = true, why = "") {
+  const b = $(id);
+  b.setAttribute("aria-checked", String(!!on));
+  b.setAttribute("aria-disabled", String(!usable));
+  b.title = usable ? "" : why;
+  b.onclick = () => { if (usable) onToggle(!on); };
 }
 // Saves go through one queue. The UI changes at once (S.settings is the latest local state); each request sends the LATEST local state, so
 // quick successive changes are merged and none is lost. S.saved is the last state the backend accepted: an error rolls back to it.
@@ -1441,6 +1641,7 @@ function renderSession() {
   document.body.dataset.stream = streaming ? "on" : "off";
   $("connecting").hidden = streaming || !active;
   $("hud").hidden = !streaming;
+  paintDebugBar();
   if (!active || streaming) { clearInterval(S.connTimer); S.connStart = 0; $("connect-hint").hidden = true; }
   if (active && !streaming && !S.connStart) {
     S.connStart = Date.now();
@@ -1924,7 +2125,11 @@ function onInputEvent(e) {
   S.input = { mapping: !!o.mapping, profile: o.profile || "", notice: o.notice || "" };
   paintMapping();
   $("hud").classList.toggle("locked", S.input.mapping);
-  if (was !== S.input.mapping && streaming()) wakeHud(); // the cursor is released (or hidden): show where the controls are
+  if (was !== S.input.mapping && streaming()) {
+    wakeHud(); // the cursor is released (or hidden): show where the controls are
+    // say so at the top of the stream, where it is seen (F10 or the Controls tile)
+    toast(S.input.mapping ? `Keyboard and mouse on${S.input.profile ? ` · ${S.input.profile.replaceAll("_", " ")}` : ""}` : "Keyboard and mouse off", "info", 2600);
+  }
   if (o.notice) log(`input: ${o.notice}`);
 }
 
@@ -1965,6 +2170,7 @@ const DIAG_SECONDS = 30;
 let diagTick = 0, diagHide = 0;
 function diagShow(text, cls) {
   const box = $("diag-timer");
+  unfade(box);
   box.hidden = false;
   box.className = `diag-timer ${cls || ""}`;
   $("diag-timer-text").textContent = text;
@@ -1997,7 +2203,7 @@ async function runDiag() {
     diagShow("Recording completed", "ok");
     toast(`Recording completed. ${text}`, "ok", 9000);
   }
-  diagHide = setTimeout(() => { $("diag-timer").hidden = true; }, 8000);
+  diagHide = setTimeout(() => fadeOut($("diag-timer"), () => { $("diag-timer").hidden = true; }), 8000);
 }
 $("diag-btn").onclick = () => {
   if (S.diag) return;
@@ -2011,37 +2217,270 @@ function diagOnConnected() {
   if (S.diag?.armed) setTimeout(() => { if (S.diag?.armed && S.session.state === "connected") { S.diag = null; runDiag(); } }, 3000);
 }
 
+// ---- help popovers: a small "?" that explains on hover or focus, and stays open when clicked ---------------------------------------------------
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest?.(".help-btn");
+  for (const h of $$(".help.open")) if (!btn || h !== btn.parentElement) { h.classList.remove("open"); h.querySelector(".help-btn").setAttribute("aria-expanded", "false"); }
+  if (!btn) return;
+  btn.parentElement.classList.remove("dismissed");
+  const open = btn.parentElement.classList.toggle("open");
+  btn.setAttribute("aria-expanded", String(open));
+});
+// Esc closes every explanation that is showing, also one that is only there because the "?" has focus or the pointer is over it;
+// it stays closed until the pointer leaves or focus moves away.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  for (const h of $$(".help")) {
+    if (!h.matches(".open, :hover, :focus-within")) continue;
+    h.classList.remove("open");
+    h.classList.add("dismissed");
+    h.querySelector(".help-btn").setAttribute("aria-expanded", "false");
+  }
+});
+const undismiss = (ev) => {
+  const h = ev.target.closest?.(".help.dismissed");
+  if (h && !h.contains(ev.relatedTarget)) h.classList.remove("dismissed");
+};
+document.addEventListener("mouseout", undismiss);
+document.addEventListener("focusout", undismiss);
+// A popover is laid out even while it is hidden, so one that reaches past the right edge of the page makes the whole page scroll sideways
+// (the "?" next to a control on the right, in a narrow window). Each one is moved left, as far as needed, to end inside the page.
+function fitHelpPops() {
+  const page = document.querySelector("main");
+  if (!page) return;
+  const edge = page.getBoundingClientRect().left + page.clientWidth - 12;
+  for (const pop of $$(".help-pop", page)) {
+    const host = pop.parentElement.getBoundingClientRect();
+    if (!host.width) continue; // on a page that is not showing
+    pop.style.left = "";
+    const over = host.left - 5 + pop.offsetWidth - edge;
+    if (over > 0) pop.style.left = `${-5 - over}px`;
+  }
+}
+{
+  let queued = 0;
+  const later = () => { clearTimeout(queued); queued = setTimeout(fitHelpPops, 30); };
+  window.addEventListener("resize", later, { passive: true });
+  const page = document.querySelector("main");
+  if (page) new MutationObserver(later).observe(page, { childList: true, subtree: true, attributeFilter: ["hidden"], attributes: true });
+}
+
 // ---- frame pacing readout ----------------------------------------------------------------------------------------------------
 let renderTimer = 0;
+// The last ten seconds of readings (one a second): what the averages in the top bar are made of.
+const STAT_WINDOW_MS = 10000;
+let statHist = [];
+// `sample` ({ fps, ms }) joins the readings of the last `windowMs`; returns what is left of them and their averages.
+function windowAverages(hist, sample, now, windowMs) {
+  const kept = [...hist, { ...sample, t: now }].filter((h) => now - h.t < windowMs);
+  const mean = (key) => kept.reduce((a, h) => a + h[key], 0) / kept.length;
+  return { hist: kept, fps: mean("fps"), ms: mean("ms") };
+}
+// Every item of the top bar has a width of its own (in characters of the monospace font), so one whose number gains or loses a digit does
+// not push the others around.
+function fixedWidth(node, chars) {
+  node.style.setProperty("--w", `${chars}ch`);
+  node.classList.add("fixed");
+  return node;
+}
 async function pollRender() {
   const [, r] = await call("render_stats");
+  S.render = r || null;
+  paintDebugBar();
   const box = $("hud-render");
-  if (!r || r.renderer !== "metal" || !r.presented) { box.replaceChildren(); return; }
+  if (!r || r.renderer !== "metal" || !r.presented) { statHist = []; box.replaceChildren(); return; }
   const chips = [];
   // what the display really showed (Metal's presented times); the submit cadence is the fallback
   const shown = r.shown_interval_ms > 0;
   // what the game renders (distinct pictures per second), not what the stream or the display carries
   const fps = r.content_fps > 0 ? r.content_fps : shown ? 1000 / r.shown_interval_ms : 0;
   const jitter = shown ? r.shown_jitter_ms : r.present_jitter_ms;
-  // the frames per second on screen now, then a small icon for each thing that is switched on (the details are in the tooltips)
+  // what is on the screen now: its rate and the time between two frames
+  const outFps = shown ? 1000 / r.shown_interval_ms : r.target_hz || fps;
+  const frameMs = shown ? r.shown_interval_ms : outFps > 0 ? 1000 / outFps : 0;
+  const avg = windowAverages(statHist, { fps, ms: frameMs }, Date.now(), STAT_WINDOW_MS);
+  statHist = avg.hist;
+  const avgFps = avg.fps, avgMs = avg.ms;
+  // the frames per second now, then a small icon for each thing that is switched on (the details are in the tooltips)
   const icon = (name, title) => el("span", { className: "ico", title, attrs: { role: "img", "aria-label": title } }, svg(name));
-  // with frame generation on: what the game renders, then what is shown
-  const gen = r.generating && r.target_hz > fps * 1.05;
-  chips.push(el("span", { textContent: gen ? `${Math.round(fps)} → ${Math.round(r.target_hz)} fps` : `${Math.round(fps)} fps`, title: `The game renders ${Math.round(fps)} frames per second${r.repeat_share > 0.05 ? ` (the stream repeats ${Math.round(r.repeat_share * 100)}% of its frames)` : ""}; ${shown ? Math.round(1000 / r.shown_interval_ms) : 0} frames per second are shown on a ${Math.round(r.refresh_hz || 0)} Hz display` }));
+  // the game's own rate only: what frame generation adds is in the frame generation item
+  chips.push(fixedWidth(el("span", { textContent: `${Math.round(fps)} fps · avg ${avgFps.toFixed(1)}`, title: `The game renders ${Math.round(fps)} frames per second now; ${avgFps.toFixed(1)} on average over the last ${STAT_WINDOW_MS / 1000} seconds${r.repeat_share > 0.05 ? ` (the stream repeats ${Math.round(r.repeat_share * 100)}% of its frames)` : ""}` }), 18));
   if (r.generating) {
-    const mult = Math.round((r.target_hz / Math.max(1, r.content_fps)) * 2) / 2;
-    const chip = icon("sparkles", `Frame generation: ${mult}× the game's ${Math.round(r.content_fps)} frames per second; the extra frames are generated here`);
-    chip.append(el("b", { textContent: `${mult}×` }));
+    const mult = Math.round((r.target_hz / Math.max(1, r.content_fps)) * 10) / 10;
+    const chip = icon("sparkles", `Frame generation: ${mult}× the game's ${Math.round(r.content_fps)} frames per second, ${Math.round(outFps)} frames per second on a ${Math.round(r.refresh_hz || 0)} Hz display; the extra frames are generated here`);
+    chip.append(fixedWidth(el("b", { textContent: `${Math.round(outFps)} fps` }), 7));
     chips.push(chip);
   }
-  if (r.upscaled) chips.push(icon("scaling", "Upscaled by the GPU"));
+  if (r.upscaled) {
+    // the icon with the height the picture is drawn at now (the multiple chosen in settings, or less when the window is smaller)
+    const chip = icon("scaling", r.upscale_height > 0 ? `Upscaled by the GPU to ${r.upscale_height}p` : "Upscaled by the GPU");
+    if (r.upscale_height > 0) chip.append(fixedWidth(el("b", { textContent: `${r.upscale_height}p` }), 5));
+    chips.push(chip);
+  }
   if (r.metalfx_active) chips.push(icon("zap", "MetalFX makes the generated frames"));
-  chips.push(el("span", { className: jitter > 2.5 ? "warn" : "", textContent: `±${jitter.toFixed(1)} ms`, title: `Frame-to-frame timing deviation on screen${shown ? `; longest gap ${r.shown_max_ms.toFixed(1)} ms, ${r.shown_late} late frames in the last two seconds` : ""}` }));
-  if (r.camera_active) chips.push(el("span", { textContent: `cam ${Math.round(r.camera_lag_ms)} ms`, title: "Camera latency compensation is on" }));
+  if (r.fsr_active) chips.push(icon("sparkles", "FSR (AMD FidelityFX Super Resolution 1) upscales the picture"));
+  if (r.adaptive && r.adaptive.on && r.adaptive.cap_hz > 0) {
+    // the GPU could not keep the rate that was asked for with every filter on: it is held to a step of 5 fps (lower still on a fixed-refresh display, see heldRate) and the picture is as set
+    const held = heldRate(r);
+    const chip = icon("info", `Adaptive frame rate: this Mac is held to ${held} fps (${Math.round(r.adaptive.asked_hz)} was asked for) so that every filter can stay on. It goes back up when there is room.`);
+    chip.classList.add("warn");
+    chip.append(fixedWidth(el("b", { textContent: `${held}` }), 3));
+    chips.push(chip);
+  }
+  chips.push(fixedWidth(el("span", { textContent: `${frameMs.toFixed(1)} ms · avg ${avgMs.toFixed(1)}`, title: `Frame time: the time between two frames on the screen, ${frameMs.toFixed(1)} ms now and ${avgMs.toFixed(1)} ms on average over the last ${STAT_WINDOW_MS / 1000} seconds` }), 19));
+  chips.push(fixedWidth(el("span", { className: jitter > 2.5 ? "warn" : "", textContent: `±${jitter.toFixed(1)} ms`, title: `Frame-to-frame timing deviation on screen${shown ? `; longest gap ${r.shown_max_ms.toFixed(1)} ms, ${r.shown_late} late frames in the last two seconds` : ""}` }), 8));
+  if (r.camera_active) chips.push(fixedWidth(el("span", { textContent: `cam ${Math.round(r.camera_lag_ms)} ms`, title: "Camera latency compensation is on" }), 10));
   box.replaceChildren(...chips);
+  if (!$("engine-pop").hidden) $("engine-now").textContent = engineNow(r);
 }
 
+// ---- debug bar ---------------------------------------------------------------------------------------------------------------
+// Everything the backend is doing while streaming, each thing with its state: on (green), off by choice (grey), degraded (amber), failing
+// (red), not available on this Mac (hollow). Shown only while "Debug tools" is on in Settings; built from the renderer's own statistics
+// (the settings it is running with, not the ones the page thinks it sent), the session's, the audio output's and the controller's.
+let dbgFolded = false;
+try { dbgFolded = localStorage.getItem("openps.dbgfold") === "on"; } catch { /* not remembered */ }
+let dbgTimer = 0;
+const dbgPct = (x) => `${Math.round((x ?? 0) * 100)} %`;
+const dbgMs = (x, d = 1) => `${Number(x ?? 0).toFixed(d)} ms`;
+function debugModel() {
+  const r = S.render, st = S.settings || {}, info = S.info || {};
+  const metal = !!r && r.renderer === "metal";
+  const c = (metal && r.config) || {};
+  const fg = (metal && r.finish_guard) || {}, ad = (metal && r.adaptive) || {};
+  const sec = [];
+  const add = (title, rows) => sec.push({ title, rows });
+  const upscaling = metal && c.upscale_factor > 0;
+  const mult = metal ? Math.round((r.target_hz / Math.max(1, r.content_fps)) * 10) / 10 : 0;
+
+  // what is running
+  const run = [];
+  run.push(metal ? ["on", "Renderer", "Metal (the GPU draws every picture)"] : ["warn", "Renderer", "the system video view: no Metal statistics, no upscaling or frame generation"]);
+  if (metal) {
+    run.push(!upscaling ? ["off", "Upscaling", "off"]
+      : r.upscaled ? ["on", "Upscaling", `${r.fsr_active ? "FSR (EASU)" : "MetalFX"} to ${r.upscale_height}p (${Math.round(c.upscale_factor * 100) / 100}× of ${st.height}p)`]
+      : ["warn", "Upscaling", `asked for ${Math.round(c.upscale_factor * 100) / 100}×, nothing to upscale to yet`]);
+    run.push(!r.upscaled ? ["off", "Finishing pass", "off (no upscaled picture)"]
+      : r.finish_pass ? ["on", "Finishing pass", `on: ${r.fsr_active ? "" : "colour conversion, "}sharpness blend and adaptive sharpening in one GPU pass`]
+      : fg.off ? ["warn", "Finishing pass", "given up by the guard (the GPU was too busy): plain upscaler"] : ["off", "Finishing pass", "off: the blend is made in the present pass"]);
+    run.push(!r.upscaled ? ["off", "Linear light", "off (no upscaling)"]
+      : r.fsr_active ? ["na", "Linear light", "FSR has no linear-light mode"]
+      : st.linear_light === false ? ["off", "Linear light", "off by choice: the scaler's perceptual mode"]
+      : r.linear_active ? ["on", "Linear light", "on: the scaler works in linear light (half floats)"]
+      : r.linear_unavailable ? ["warn", "Linear light", "this Mac could not make the linear scaler: perceptual mode"]
+      : ["off", "Linear light", fg.off ? "off (guard): perceptual mode" : "off: perceptual mode"]);
+    run.push(st.sharpness_on === false ? ["off", r.upscaled ? "Sharpness blend" : "Sharpness (unsharp)", "off by choice: the picture is left as the upscaler draws it"]
+      : ["on", r.upscaled ? "Sharpness blend" : "Sharpness (unsharp)", r.upscaled ? `${dbgPct(c.sharpness)}: ${r.finish_pass ? "blended in the finishing pass" : "blended in the present pass"} (0 plain, 100 as the upscaler draws it)` : `${dbgPct(c.sharpness)} (50 % leaves the picture alone)`]);
+    run.push(!r.upscaled ? ["off", "Adaptive sharpening", "off (needs upscaling)"]
+      : st.rcas_on === false ? ["off", "Adaptive sharpening", "off by choice"]
+      : r.rcas_active ? ["on", "Adaptive sharpening", `RCAS on, ${dbgPct(c.rcas)} (lobe ${(0.25 * c.rcas).toFixed(3)})`]
+      : c.rcas > 0 ? ["warn", "Adaptive sharpening", `set to ${dbgPct(c.rcas)} but not applied (${fg.off ? "guard" : "no finishing pass"})`] : ["off", "Adaptive sharpening", "off (0 %)"]);
+    run.push(st.saturation_on === false ? ["off", "Saturation", "off by choice (the picture as the console sends it)"]
+      : [c.saturation === 1 ? "off" : "on", "Saturation", `${dbgPct(c.saturation)}${c.saturation === 1 ? " (untouched)" : ""}`]);
+    const who = r.metalfx_active ? "MetalFX" : "the built-in interpolator";
+    run.push(!r.generating ? ["off", "Frame generation", st.framegen_on === false ? "off by choice: frames are shown as they arrive" : `nothing to generate: the display (${Math.round(r.refresh_hz)} Hz) shows no more than the stream's rate, or the adaptive frame rate holds it there`]
+      : ["on", "Frame generation", `${mult}× to ${Math.round(r.target_hz)} Hz by ${who}, ${c.smooth ? "Smooth (one frame of delay)" : "Low latency (predicts forward)"}`]);
+    run.push(c.camera ? ["on", "Camera compensation", r.camera_active ? `active, ${Math.round(r.camera_lag_ms)} ms lag, ${dbgPct(r.camera_explained)} explained` : "armed, nothing to compensate now"] : ["off", "Camera compensation", "off"]);
+    run.push(r.generating ? [r.input_prior_active ? "on" : "off", "Input motion prior", r.input_prior_active ? `the stick's motion (${Math.round(r.camera_lag_ms)} ms lag, ${dbgPct(r.camera_explained)} explained) guides the motion search` : "learning the game's response to the stick (needs a few seconds of camera movement), or the picture alone is used"] : ["off", "Input motion prior", "frame generation is off"]);
+    run.push([c.immersion ? "on" : "off", "Immersion", c.immersion ? "on (glow in the black bars)" : "off"]);
+  }
+  run.push(["on", "Engine chosen", st.engine === "fsr" ? "FSR upscales; MetalFX makes the generated midpoints at about 2×, the built-in interpolator the other rates" : "MetalFX (it also makes the midpoints at about 2×; the built-in interpolator covers the other rates)"]);
+  add("Running", run);
+
+  // what the machine offers
+  add("This Mac", [
+    [info.metal ? "on" : "na", "Metal renderer", info.metal ? "available" : "not available"],
+    [info.metalfx ? "on" : "na", "MetalFX", info.metalfx ? "spatial scaler" + (metal && r.metalfx_available ? " + frame interpolator" : "") : "not available"],
+    [info.fsr ? "on" : "na", "FSR", info.fsr ? "EASU upscaler (AMD FSR 1, ported to Metal compute shaders)" : "not available"],
+    ["on", "Display", `${Math.round((metal && r.refresh_hz) || info.display_hz || 0)} Hz${metal && r.variable_refresh ? ", variable refresh" : ""}${metal ? `, window ${r.drawable?.[0]}×${r.drawable?.[1]}, ${r.drawables} drawables` : ""}`],
+  ]);
+
+  // the safety guards
+  if (metal) {
+    const gr = [];
+    gr.push(!ad.on ? ["off", "Adaptive frame rate", "off: the rate is kept; the finishing-pass guard below gives the filters up instead"]
+      : ad.cap_hz > 0 ? ["warn", "Adaptive frame rate", `holding ${heldRate(r)} fps (${Math.round(ad.asked_hz)} asked for): the GPU is busy ${Math.round(ad.load * 100)} % of the time (${Math.round(ad.peak * 100)} % of the time between two pictures for the slowest) at this rate${heldRate(r) < ad.cap_hz ? `; it could hold ${ad.cap_hz}, but a ${Math.round(r.refresh_hz)} Hz display shows ${heldRate(r)} evenly (every picture for the same number of refreshes)` : ""}. Steps of ${ad.step_hz} fps; it goes back up when there is room`]
+      : [ad.over_s > 0 ? "warn" : "on", "Adaptive frame rate", `watching: GPU busy ${Math.round(ad.load * 100)} % of the time (down above ${Math.round(ad.heavy_mean * 100)} %), the slowest pictures take ${Math.round(ad.peak * 100)} % of the time between two (down above ${Math.round(ad.heavy_peak * 100)} %)${ad.over_s > 0 ? `; too high for ${ad.over_s.toFixed(1)} of ${ad.down_after_s} s` : ""}; ${Math.round(ad.asked_hz)} fps asked for, nothing held back`]);
+    gr.push(ad.on ? ["off", "Finishing-pass guard", "not used: the adaptive frame rate lowers the rate instead of giving filters up"]
+      : !upscaling ? ["off", "Finishing-pass guard", "idle (not upscaling)"]
+      : fg.off ? ["warn", "Finishing-pass guard", "TRIPPED: linear light and adaptive sharpening are off until the upscaling, sharpness, adaptive sharpening or frame settings change"]
+      : [fg.slow > 0 ? "warn" : "on", "Finishing-pass guard", `watching: ${fg.slow}/${fg.limit} pictures in a row over ${dbgMs(fg.ms)} of GPU time (now ${dbgMs(r.gpu_ms)} on average)`]);
+    add("Safety guards", gr);
+
+    // timing
+    const interval = 1000 / Math.max(1, r.effective_hz || 60);
+    add("Timing and GPU", [
+      ["on", "Game renders", `${Math.round(r.content_fps)} fps of distinct pictures (stream ${Math.round(r.source_fps)} fps${r.repeat_share > 0.05 ? `, ${dbgPct(r.repeat_share)} repeats` : ""})`],
+      ["on", "Shown", `${r.shown_interval_ms > 0 ? Math.round(1000 / r.shown_interval_ms) : 0} fps on screen, target ${Math.round(r.effective_hz)} Hz`],
+      [r.shown_jitter_ms > 2.5 || r.shown_late > 0 ? "warn" : "on", "Frame pacing", `±${dbgMs(r.shown_jitter_ms)}, longest gap ${dbgMs(r.shown_max_ms)}, ${r.shown_late} late in the last 2 s`],
+      [r.gpu_ms > 0.7 * interval ? "warn" : "on", "GPU time", `${dbgMs(r.gpu_ms, 2)} per picture of ${dbgMs(interval)}; ${r.gpu_inflight} in flight`],
+      ["on", "Latency", `frame wait ${dbgMs(r.frame_wait_ms)}, to the screen ${dbgMs(r.present_latency_ms)}, queue ${dbgMs(r.queue_delay_ms)}, network jitter ${dbgMs(r.network_jitter_ms)}`],
+      [r.playout_ms > 0.5 ? "on" : "off", "Smoothing buffer", c.smooth ? (st.pacing_buffer === false ? "off by choice: a late frame is a stall of its own lateness" : `holding the picture back ${dbgMs(r.playout_ms)} (up to 25 ms) so frames that arrive late are still in time`) : "not used in Low latency mode"],
+      [r.uncapped_active ? "on" : "off", "Above the display's rate", r.uncapped_active ? `frames made and handed over at up to ${Math.round(r.target_hz)} per second on a ${Math.round(r.refresh_hz)} Hz display: the newest is shown at each refresh` : st.uncapped_rate ? "chosen, but not in use (full screen, or no frame generation)" : "off (the display's refresh rate is the limit)"],
+      [r.mailbox_drops > 0 ? "warn" : "on", "Frames", `${r.real_frames} real, ${r.generated} generated, ${r.presented} shown; ${r.mailbox_drops} dropped for being late, ${r.mailbox_len} waiting`],
+      [r.errors > 0 ? "bad" : "on", "GPU errors", String(r.errors)],
+    ]);
+  }
+
+  // the stream
+  const sm = S.stream;
+  add("Stream", [
+    [S.session.state === "connected" ? "on" : "warn", "Session", S.session.state],
+    ["on", "Asked for", `${st.height}p, ${st.fps} fps, ${st.hevc ? "HEVC" : "H.264"}${st.hdr ? ", HDR" : ""}, ${st.bitrate === -1 ? "auto bitrate" : (st.bitrate / 1000) + " Mbit/s"}`],
+    sm ? ["on", "Receiving", `${(sm.kbps / 1000).toFixed(1)} Mbit/s, ${Math.round(sm.fps)} fps`] : ["off", "Receiving", "waiting for the first second"],
+    sm ? [sm.video_frames_dropped > 0 ? "warn" : "on", "Network", `${sm.video_frames_dropped} video frames dropped, ${sm.datagrams_in} packets in, ${sm.datagrams_out} out`] : ["off", "Network", "-"],
+  ]);
+
+  // sound and controls
+  const a = S.audio;
+  const pads = S.controller?.pads || [];
+  add("Sound and controls", [
+    !a ? ["off", "Audio", "reading…"] : !a.available || a.problem ? ["bad", "Audio", a.problem || "not available"]
+      : [a.underruns > 0 || a.errors > 0 ? "warn" : "on", "Audio", `on, volume ${Math.round(a.volume ?? 100)} %; ${a.decoded} packets decoded, ${a.errors} errors, ${a.underruns} underruns, ${a.overruns} overruns`],
+    pads.length ? ["on", "Controller", pads.map((p) => `${p.kind}${Number.isFinite(p.batteryLevel) ? ` ${Math.round(p.batteryLevel * 100)} %${p.charging ? " charging" : ""}` : ""}`).join(", ")] : ["off", "Controller", "none connected"],
+    [S.input.mapping ? "on" : "off", "Keys and mouse", S.input.mapping ? `on${S.input.profile ? `, profile ${S.input.profile}` : ""}` : "off (the controller plays)"],
+    ["on", "Feel", `rumble ${st.rumble_pct ?? 100} %, adaptive triggers ${st.trigger_pct ?? 100} %${S.controller ? `, stick dead zone ${Math.round(S.controller.deadzone * 100)} %` : ""}`],
+  ]);
+  add("App", [["on", "Version", `${info.version}${info.demo ? " (demo build)" : ""}`]]);
+  return sec;
+}
+function debugText() {
+  return debugModel().map((s) => `${s.title}\n${s.rows.map(([state, k, v]) => `  [${state}] ${k}: ${v}`).join("\n")}`).join("\n\n");
+}
+async function refreshDebugExtras() {
+  const [, a] = await call("audio_status");
+  if (a) S.audio = a;
+  const [, c] = await call("controller_status");
+  if (c) S.controller = c;
+}
+function paintDebugBar() {
+  const bar = $("debug-bar");
+  const on = !!S.settings?.debug && S.session.state === "connected";
+  bar.hidden = !on;
+  if (!on) { clearInterval(dbgTimer); dbgTimer = 0; return; }
+  if (!dbgTimer) { refreshDebugExtras(); dbgTimer = setInterval(refreshDebugExtras, 3000); }
+  bar.classList.toggle("folded", dbgFolded);
+  $("dbg-fold").setAttribute("aria-expanded", String(!dbgFolded));
+  $("dbg-fold").querySelector("use").setAttribute("href", dbgFolded ? "#i-plus" : "#i-minus");
+  const r = S.render, m = r && r.renderer === "metal";
+  $("dbg-sub").textContent = m ? `${r.upscaled ? r.upscale_height + "p" : "no upscaling"} · ${Math.round(r.content_fps)}${r.generating ? "→" + Math.round(r.target_hz) : ""} fps · GPU ${Number(r.gpu_ms).toFixed(1)} ms` : "no renderer statistics";
+  if (dbgFolded) return;
+  const body = $("dbg-body"), top = body.scrollTop;
+  body.replaceChildren(...debugModel().map((s) => el("section", { className: "dbg-sec" }, el("h4", { textContent: s.title }),
+    el("dl", {}, ...s.rows.map(([state, k, v]) => el("div", { className: "dbg-row", dataset: { s: state } }, el("span", { className: "dbg-dot", attrs: { "aria-hidden": "true" } }), el("dt", { textContent: k }), el("dd", { textContent: v })))))));
+  body.scrollTop = top;
+}
+$("dbg-fold").onclick = () => {
+  dbgFolded = !dbgFolded;
+  try { localStorage.setItem("openps.dbgfold", dbgFolded ? "on" : "off"); } catch { /* not remembered */ }
+  paintDebugBar();
+};
+$("dbg-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(debugText()); toast("Debug readout copied", "info", 1800); } catch { toast("Could not copy the debug readout", "error"); }
+};
+
 function onStats(s) {
+  S.stream = s;
   const box = $("hud-stats");
   box.replaceChildren(el("span", { textContent: `${(s.kbps / 1000).toFixed(1)} Mbit/s` }));
   if (s.video_frames_dropped > 0) box.append(el("span", { className: "warn", textContent: `${s.video_frames_dropped} dropped` }));
@@ -2059,7 +2498,8 @@ function onSessionEvent(e) {
   const detail = e.reason ? `: ${e.reason}` : e.attempt ? ` (attempt ${e.attempt})` : "";
   log(`session ${e.state}${detail}`, e.state === "failed" ? "error" : "info");
   renderSession();
-  if (e.state === "connected") { hideBanner(); diagOnConnected(); }
+  if (e.state === "connected") { hideBanner(); diagOnConnected(); if (!S.settings) renderSettings(); else { paintImmersion(); paintEnginePop(); } }
+  if (prev === "connected" && (e.state === "closed" || e.state === "failed")) setTimeout(autoRefreshLibrary, 3000); // played games and trophies have changed
   if (e.state === "failed" && S.wakeRetry && S.wakeRetry.id === S.activeId && Date.now() < S.wakeRetry.until && wakeRetryable(e.reason, S.wakeRetry.woke)) {
     // keep the connect screen up and say what is being waited for, instead of flashing an error
     setFlow(S.pendingGame ? `Starting ${S.pendingGame.game.name}` : "Connecting",
@@ -2107,8 +2547,64 @@ listen("openps://event", ({ payload: e }) => {
       break;
   }
 });
+// ---- controller battery on the home page ---------------------------------------------------------------------------------------
+// A small strip while a controller is connected: its name, a battery bar and the percentage. The bar is red up to 25 %, yellow up to 50 %,
+// green above, and its coloured part is as wide as the level, so it shrinks as the battery drains. A pill is kept per controller and patched
+// in place, so the bar moves smoothly when the level changes; the strip fades away when the last controller goes.
+// (The width goes through the CSS object model: the page's content security policy forbids `style` attributes.)
+const padPills = new Map();
+const batteryBand = (pct) => (pct <= 25 ? "low" : pct <= 50 ? "mid" : "ok");
+function padPill(slot) {
+  let p = padPills.get(slot);
+  if (p) return p;
+  const fill = el("i");
+  fill.style.setProperty("--v", "0");
+  p = {
+    fill,
+    name: el("span", { className: "pad-name" }),
+    pct: el("b"),
+    bolt: svg("zap"),
+    root: null,
+  };
+  p.bolt.classList.add("charging");
+  p.root = el("div", { className: "pad-pill" }, svg("gamepad"), p.name, el("span", { className: "batt", attrs: { role: "img" } }, fill), p.pct, p.bolt);
+  padPills.set(slot, p);
+  return p;
+}
+async function renderPadBattery() {
+  const box = $("pad-battery");
+  const [e, status] = await call("controller_status");
+  const pads = e ? [] : status.pads;
+  if (!pads.length) {
+    padPills.clear();
+    fadeOut(box, () => { box.hidden = true; box.replaceChildren(); });
+    return;
+  }
+  unfade(box);
+  box.hidden = false;
+  const seen = new Set();
+  pads.forEach((pad, i) => {
+    seen.add(pad.slot);
+    const p = padPill(pad.slot);
+    const known = Number.isFinite(pad.batteryLevel);
+    const level = known ? Math.min(1, Math.max(0, pad.batteryLevel)) : 0;
+    const pct = Math.round(level * 100);
+    const text = known ? `${pct}%${pad.charging ? " · charging" : ""}` : "battery unknown";
+    p.root.dataset.level = known ? batteryBand(pct) : "unknown";
+    p.root.title = `${pad.name}: ${text}`;
+    p.name.textContent = pad.name;
+    p.pct.textContent = known ? `${pct}%` : "–";
+    p.bolt.style.display = pad.charging ? "" : "none";
+    p.root.querySelector(".batt").setAttribute("aria-label", `Battery ${text}`);
+    if (box.children[i] !== p.root) box.insertBefore(p.root, box.children[i] || null);
+    void p.fill.offsetWidth; // the bar is drawn empty first, so the first fill animates (no animation frame needed: it may not run in a hidden window)
+    p.fill.style.setProperty("--v", String(level));
+  });
+  for (const [slot, p] of padPills) if (!seen.has(slot)) { p.root.remove(); padPills.delete(slot); }
+}
 listen("openps://pads", () => {
   if (S.view === "settings") renderControllerSettings();
+  renderPadBattery();
 }).catch((e) => log(`Could not listen for controller changes: ${errText(e)}`, "error"));
 
 window.addEventListener("error", (ev) => /ResizeObserver/i.test(ev.message) || toast(`Unexpected error: ${ev.message}`, "error"));
@@ -2134,6 +2630,7 @@ $("log-copy").onclick = async () => {
   await refreshConsoles();
   await loadGameMaps();
   paintPsnApi(); // also loads the games shelf when the account is connected
+  renderPadBattery();
   renderSession();
   scan(false);
   setInterval(() => { if (S.view === "consoles" && !busy() && !document.hidden) scan(false); }, 20000);

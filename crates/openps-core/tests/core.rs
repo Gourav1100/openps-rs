@@ -75,6 +75,8 @@ struct Fake {
     stop: Arc<AtomicBool>,
     /// `open_links` returns a stream link whose sink panics (a runtime thread dies).
     dead_links: AtomicBool,
+    /// The streaming type of every `open_control` call, in order.
+    streaming_calls: Mutex<Vec<StreamingType>>,
 }
 
 impl Backend for Fake {
@@ -95,9 +97,10 @@ impl Backend for Fake {
         _: DeviceType,
         version: &str,
         _: &Registered,
-        _: StreamingType,
+        streaming: StreamingType,
     ) -> Result<Box<dyn ControlLink>, ClientError> {
         self.control_calls.fetch_add(1, Ordering::Relaxed);
+        self.streaming_calls.lock().unwrap().push(streaming);
         if let Some(e) = self.control_error.lock().unwrap().take() {
             return Err(e);
         }
@@ -564,15 +567,28 @@ fn settings_are_validated_persisted_and_survive_restart() {
         hevc: true,
         hdr: false,
         volume: 35,
-        upscale: "1440p".into(),
+        upscale: "1.33x".into(),
         display_fps: 144,
         frame_gen: 20,
+        framegen_on: true,
+        adaptive_fps: false,
+        pacing_buffer: true,
+        uncapped_rate: false,
+        linear_light: false,
+        sharpness_on: false,
+        rcas_on: true,
+        saturation_on: false,
         frame_mode: "smooth".into(),
         camera_comp: true,
-        framegen: "builtin".into(),
+        engine: "fsr".into(),
         sharpness: 50,
+        rcas: 100,
         saturation: 100,
-        settings_version: 2,
+        immersion: true,
+        debug: false,
+        rumble_pct: 120,
+        trigger_pct: 80,
+        settings_version: openps_core::types::SETTINGS_VERSION,
     };
     r.core.set_settings(o.clone()).unwrap();
     assert_eq!(r.core.settings(), Some(o.clone()));
@@ -988,4 +1004,64 @@ fn only_one_remote_registration_runs_at_a_time_and_cancel_reaches_it() {
     let e = t.join().unwrap().unwrap_err();
     assert!(e.to_string().contains("cancelled"), "{e}");
     r.core.cancel_remote(); // nothing running: harmless
+}
+
+// ---- first-picture watchdog ----------------------------------------------------------------------------------------------
+/// Receives video but never shows a picture: a decoder that cannot cope with the stream.
+struct Blind;
+impl MediaSink for Blind {
+    fn pictures_shown(&self) -> Option<u64> {
+        Some(0)
+    }
+}
+
+fn blind_core(fake: &Arc<Fake>, events: &Arc<VecSink>, dir: &tempfile::TempDir) -> (Core, ConsoleRecord) {
+    let core = Core::new(CoreBuilder {
+        store: ConsoleStore::open(dir.path().join("state.json")).unwrap(),
+        secrets: Arc::new(MemoryStore::default()),
+        backend: fake.clone(),
+        psn: Some(Arc::new(FakePsn { fail: AtomicBool::new(false), signed_out: AtomicBool::new(false) })),
+        events: events.clone(),
+        media: Arc::new(Blind),
+        settle_s: 0.0,
+        senkusha: SenkushaConfig { io_timeout_s: 0.02, attempts: 2, retry_delay_s: 0.01, ..Default::default() },
+    });
+    core.set_auto_bitrate_probe(|_| None);
+    core.set_first_picture_timeout(Duration::from_millis(400));
+    core.psn_complete("https://x/redirect?code=1").unwrap();
+    *fake.register.lock().unwrap() = Some(Ok(registered(DeviceType::Ps5)));
+    let rec = core.register("10.0.0.9", Device::Ps5, "12345678", None).unwrap();
+    fake.serve.store(true, Ordering::Relaxed);
+    *fake.frames_to_send.lock().unwrap() = 3;
+    (core, rec)
+}
+
+#[test]
+fn a_session_that_never_shows_a_picture_fails_with_a_clear_reason_instead_of_staying_connected() {
+    let (fake, events, dir) = (Arc::new(Fake::default()), Arc::new(VecSink::default()), tempfile::tempdir().unwrap());
+    let (core, rec) = blind_core(&fake, &events, &dir);
+    core.connect(&rec.id, StreamOptions { hevc: false, ..Default::default() }).unwrap();
+    assert!(core.wait_idle(Duration::from_secs(15)), "never ended: {:?}", events.states());
+    assert!(
+        matches!(core.session_state(), SessionState::Failed { ref reason } if reason.contains("no picture could be decoded")),
+        "{:?}",
+        core.session_state()
+    );
+    assert_eq!(fake.control_calls.load(Ordering::Relaxed), 1, "H.264 was already in use: nothing else to try");
+    fake.stop.store(true, Ordering::Relaxed);
+}
+
+#[test]
+fn a_decoder_that_shows_nothing_for_hevc_is_retried_once_with_h264() {
+    let (fake, events, dir) = (Arc::new(Fake::default()), Arc::new(VecSink::default()), tempfile::tempdir().unwrap());
+    let (core, rec) = blind_core(&fake, &events, &dir);
+    core.connect(&rec.id, StreamOptions { hevc: true, hdr: true, ..Default::default() }).unwrap();
+    assert!(core.wait_idle(Duration::from_secs(20)), "never ended: {:?}", events.states());
+    assert_eq!(
+        *fake.streaming_calls.lock().unwrap(),
+        vec![StreamingType::HevcHdr, StreamingType::Avc],
+        "the second attempt gives up HEVC and HDR"
+    );
+    assert!(matches!(core.session_state(), SessionState::Failed { .. }), "the blind sink fails H.264 too");
+    fake.stop.store(true, Ordering::Relaxed);
 }

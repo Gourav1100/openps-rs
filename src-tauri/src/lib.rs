@@ -340,6 +340,7 @@ fn app_info(dir: State<'_, DataDir>, core: State<'_, Core>) -> serde_json::Value
       "display_hz": display_hz(),
       "metal": metal_available(),
       "metalfx": metalfx_framegen_available(),
+      "fsr": fsr_available(),
       "notices": NOTICES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
           .iter().map(|(k, d)| serde_json::json!({ "kind": k, "detail": d })).collect::<Vec<_>>(),
     })
@@ -359,6 +360,19 @@ fn metalfx_framegen_available() -> bool {
     {
         static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *OK.get_or_init(|| openps_metal::gpu::Gpu::new().is_ok_and(|g| g.fx_available))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Whether the FSR upscaler (AMD's FSR 1, ported to Metal compute shaders) can run: any Mac whose Metal pipelines build.
+fn fsr_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OK.get_or_init(|| openps_metal::gpu::Gpu::new().is_ok())
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -390,6 +404,8 @@ fn set_settings(app: AppHandle, core: State<'_, Core>, settings: StreamOptions) 
     core.set_settings(settings.clone()).map_err(|e| e.to_string())?;
     apply_volume(&app, volume);
     apply_video(&app, &settings);
+    #[cfg(target_os = "macos")]
+    pads::apply_tuning(&app, &settings);
     Ok(())
 }
 
@@ -714,6 +730,8 @@ pub fn run() {
             pads::controller_status,
             #[cfg(target_os = "macos")]
             pads::controller_set_deadzone,
+            #[cfg(target_os = "macos")]
+            pads::controller_test,
             get_settings,
             render_stats,
             input::input_profiles,
@@ -830,7 +848,12 @@ pub fn run() {
                 pads::set_focus(app.handle(), w.is_focused().unwrap_or(false));
             }
             #[cfg(target_os = "macos")]
-            pads::init(app.handle());
+            {
+                pads::init(app.handle());
+                if let Some(saved) = app.state::<Core>().settings() {
+                    pads::apply_tuning(app.handle(), &saved);
+                }
+            }
             // Window events can arrive before a full-screen transition has finished, so the renderer's idea of "full screen" (and of the
             // display's refresh rate) is also re-read twice a second. Cheap, and it always converges. The timer thread only posts
             // to the main thread: NSWindow and NSScreen may be used from there only.

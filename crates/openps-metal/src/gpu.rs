@@ -23,6 +23,10 @@ struct MeParams {
     lambda: f32,
     flat: f32,
     conf_scale: f32,
+    lambda_refine: f32,
+    /// 1 when `mv_prev` holds the previous pair's motion field.
+    temporal: f32,
+    pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -60,6 +64,21 @@ struct WarpParams {
 
 /// Search radius in half-resolution pixels (16 full-resolution pixels per frame interval).
 pub const SEARCH_RADIUS: i32 = 8;
+
+/// How far the whole-picture search looks, in quarter-size luma pixels (matches `GLOBAL_R` in the shader): 96 pixels of the picture.
+const GLOBAL_RADIUS: i32 = 12;
+
+/// Cost of a longer vector in the block search, per half-resolution pixel of its length, summed over the 64 pixels of a block (0.003 of
+/// the brightness range per pixel). A row of identical lines matches at every multiple of their spacing; this keeps the nearest one
+/// unless another is clearly better.
+const ME_LAMBDA: f32 = 0.1;
+
+/// Cost of a fine block's vector differing from its coarse block's, per half-resolution pixel (the refinement ties otherwise go to
+/// whichever line of a repeating pattern was tried first).
+const REFINE_LAMBDA: f32 = 0.05;
+
+/// Rounds of `propagate` (odd: the result ends in the scratch field, from which the last step writes the field the later stages read).
+const PROPAGATE_PASSES: usize = 7;
 
 /// Largest texture dimension Metal accepts on every Apple GPU; anything above aborts the process in the descriptor.
 pub const MAX_TEXTURE_DIM: usize = 16384;
@@ -118,7 +137,32 @@ struct Scaler {
     key: (usize, usize, usize, usize),
     scaler: Retained<ProtocolObject<dyn MTLFXSpatialScaler>>,
     out: Tex,
+    /// Linear-light colour mode: the picture goes in as half floats in `lin_in` and comes out of `out` as half floats.
+    linear: bool,
+    lin_in: Option<Tex>,
+    /// The finished picture (blend and RCAS applied), when a finishing pass is needed.
+    post: Tex,
 }
+
+/// Whether the GPU is too busy for the upscaler's finishing pass (linear light, RCAS): it uses more than 70 % of the time between two
+/// displayed pictures. (At 4K the pass costs about 2 ms, which is a lot at 120 Hz and nothing at 60.)
+pub fn finish_pass_too_slow(gpu_ms: f64, interval_ms: f64) -> bool {
+    gpu_ms.is_finite() && interval_ms.is_finite() && interval_ms > 0.0 && gpu_ms > 0.7 * interval_ms
+}
+
+/// The RCAS lobe scale (2^-stops of FSR's own sharpness control) for a strength in 0..=2 (the slider's percent over 100): 1.0 is stops 2
+/// (0.25), where RCAS after the 60 % sharpness blend measured closest to the real picture at every bitrate; 2.0 is stops 1, twice the
+/// lobe; 0 is off. Anything that is not a number is off.
+pub fn rcas_lobe(strength: f32) -> f32 {
+    if strength.is_finite() {
+        0.25 * strength.clamp(0.0, 2.0)
+    } else {
+        0.0
+    }
+}
+
+/// Consecutive pictures the GPU must be too busy for (see [`finish_pass_too_slow`]) before the finishing pass is given up.
+pub const FINISH_GUARD_PICTURES: u32 = 120;
 
 pub struct Gpu {
     pub dev: Device,
@@ -128,6 +172,19 @@ pub struct Gpu {
     warp: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     reset_stats: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     refine: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    down4: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    global_search: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    propagate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    dominant_motion: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    adopt_dominant: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    /// The motion the controller says the camera has made between the last two frames (x, y in half-size pixels, trust 0..1; trust 0 = nothing
+    /// learned): set by the renderer before each ingest and handed to the motion search as inline bytes.
+    input_prior: [f32; 4],
+    /// What the clear blocks agree on (x, y in half-size pixels, their share of all blocks, their number).
+    dom_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
+    /// The motion of the picture as a whole (x, y in half-resolution pixels, z = 1 when it is a clear win over no motion): the prior of the
+    /// block search, found by `global_search` on the quarter-size luma.
+    gbuf: Retained<ProtocolObject<dyn MTLBuffer>>,
     bg_update: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     warp2: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     interp: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
@@ -138,7 +195,14 @@ pub struct Gpu {
     diff_bufs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
     diff_next: usize,
     last_diff: Option<usize>,
+    to_linear: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    finish_up: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    fsr_easu: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     present: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    ambient: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    glow_down: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    /// The picture shrunk to `GLOW_SIZE`: what the immersion glow is made of.
+    glow: Tex,
     // per-stream state
     cur: Option<Tex>,
     prev: Option<Tex>,
@@ -146,7 +210,15 @@ pub struct Gpu {
     bg: Option<Tex>,
     luma_cur: Option<Tex>,
     luma_prev: Option<Tex>,
+    coarse_cur: Option<Tex>,
+    coarse_prev: Option<Tex>,
     mv: Option<Tex>,
+    /// The motion field of the previous frame pair: where the lines were going a frame ago is where they go now (see `motion`).
+    mv_prev: Option<Tex>,
+    /// Scratch for `propagate` (it works from one field into another and back).
+    mv_tmp: Option<Tex>,
+    /// `mv_prev` is the field of the immediately preceding ingest.
+    mv_fresh: bool,
     /// CPU-readable copies of `mv`, one per ingest (ring): a later in-flight command buffer cannot tear a read.
     mv_snaps: Vec<Tex>,
     snap_next: usize,
@@ -163,7 +235,25 @@ pub struct Gpu {
     pub fx_use: bool,
     /// How much of the MetalFX upscaler's edge contrast to keep: 1 = all of it, 0 = a plain smooth enlargement.
     pub sharpness: f32,
+    /// Run the MetalFX scaler in linear light (half floats) instead of its perceptual mode: measured closer to the real picture at every bitrate.
+    /// Falls back to the perceptual mode by itself if the Mac cannot create it.
+    pub linear_upscale: bool,
+    /// RCAS strength on the upscaled picture, 0 (off) ..= 2 (see `rcas_lobe`); independent of `sharpness`.
+    pub rcas: f32,
+    /// A scratch picture for the FSR upscaler's output (its size follows the target).
+    fsr_out: Option<Tex>,
+    /// The finished picture of the FSR path (blend and RCAS applied).
+    fsr_post: Option<Tex>,
+    /// Upscale with AMD's FSR 1 (EASU) instead of MetalFX's spatial scaler.
+    pub fsr: bool,
+    /// Whether the last upscaled picture was made by FSR (for the stats).
+    fsr_used: bool,
+    linear_ok: bool,
+    /// Whether the last upscaled picture went through the finishing pass (for the stats).
+    finish_used: bool,
     /// Colour saturation applied when the picture is presented (1.0 = as the stream is).
+    /// Fill the bars around the picture with a soft glow of its colours instead of black.
+    pub immersion: bool,
     pub saturation: f32,
     /// Unsharp-mask amount applied when the picture was not upscaled (0 = none, negative softens).
     pub sharpen: f32,
@@ -175,6 +265,11 @@ pub struct Gpu {
 }
 
 const DIFF_SLOTS: usize = 16;
+/// Size of the tiny image the immersion glow is made from.
+const GLOW_SIZE: (usize, usize) = (96, 54);
+/// How bright the glow is next to the picture, and how far it is blurred (a fraction of the window).
+const AMBIENT_DIM: f32 = 0.85;
+const AMBIENT_RADIUS: f32 = 0.05;
 
 fn pso(
     dev: &Device,
@@ -207,11 +302,41 @@ impl Gpu {
         let present = dev
             .newRenderPipelineStateWithDescriptor_error(&rd)
             .map_err(|e| GpuError::Pipeline(format!("present: {e}")))?;
+        let render_pso = |frag: &str| -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, GpuError> {
+            let rd = MTLRenderPipelineDescriptor::new();
+            let fs = lib.newFunctionWithName(&NSString::from_str(frag)).ok_or_else(|| GpuError::Shader(frag.into()))?;
+            rd.setVertexFunction(Some(&vs));
+            rd.setFragmentFunction(Some(&fs));
+            unsafe { rd.colorAttachments().objectAtIndexedSubscript(0).setPixelFormat(MTLPixelFormat::BGRA8Unorm) };
+            dev.newRenderPipelineStateWithDescriptor_error(&rd).map_err(|e| GpuError::Pipeline(format!("{frag}: {e}")))
+        };
+        let ambient = render_pso("ambient_fs")?;
+        let glow_down = render_pso("glow_down_fs")?;
+        let glow = make_tex(
+            &dev,
+            MTLPixelFormat::BGRA8Unorm,
+            GLOW_SIZE.0,
+            GLOW_SIZE.1,
+            MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
+            false,
+        )?;
         let spatial_scaler_available = unsafe { MTLFXSpatialScalerDescriptor::supportsDevice(&dev) };
         let dev_for_probe = dev.clone();
-        Ok(Self {
+        let gpu = Self {
             reset_stats: pso(&dev, &lib, "reset_stats")?,
             refine: pso(&dev, &lib, "refine")?,
+            down4: pso(&dev, &lib, "down4")?,
+            global_search: pso(&dev, &lib, "global_search")?,
+            propagate: pso(&dev, &lib, "propagate")?,
+            input_prior: [0.0; 4],
+            dominant_motion: pso(&dev, &lib, "dominant_motion")?,
+            adopt_dominant: pso(&dev, &lib, "adopt_dominant")?,
+            dom_buf: dev
+                .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)
+                .ok_or(GpuError::Texture("dominant motion buffer"))?,
+            gbuf: dev
+                .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)
+                .ok_or(GpuError::Texture("global motion buffer"))?,
             bg_update: pso(&dev, &lib, "bg_update")?,
             warp2: pso(&dev, &lib, "warp2")?,
             interp: pso(&dev, &lib, "interp")?,
@@ -231,7 +356,13 @@ impl Gpu {
             luma: pso(&dev, &lib, "luma_half")?,
             motion: pso(&dev, &lib, "motion")?,
             warp: pso(&dev, &lib, "warp")?,
+            to_linear: pso(&dev, &lib, "to_linear")?,
+            finish_up: pso(&dev, &lib, "finish_up")?,
+            fsr_easu: pso(&dev, &lib, "fsr_easu")?,
             present,
+            ambient,
+            glow_down,
+            glow,
             dev,
             queue,
             cur: None,
@@ -240,7 +371,12 @@ impl Gpu {
             bg: None,
             luma_cur: None,
             luma_prev: None,
+            coarse_cur: None,
+            coarse_prev: None,
             mv: None,
+            mv_prev: None,
+            mv_tmp: None,
+            mv_fresh: false,
             mv_snaps: Vec::new(),
             snap_next: 0,
             last_snap: None,
@@ -252,11 +388,21 @@ impl Gpu {
             fx_available: unsafe { MTLFXFrameInterpolatorDescriptor::supportsDevice(&dev_for_probe) },
             fx_use: false,
             sharpness: 1.0,
+            linear_upscale: true,
+            rcas: 1.0,
+            fsr_out: None,
+            fsr_post: None,
+            fsr: false,
+            fsr_used: false,
+            linear_ok: true,
+            finish_used: false,
+            immersion: false,
             saturation: 1.0,
             sharpen: 0.0,
             blend: None,
             legacy_warp: false,
-        })
+        };
+        Ok(gpu)
     }
 
     pub fn command_buffer(&self) -> Option<Cmd> {
@@ -277,6 +423,18 @@ impl Gpu {
         );
     }
 
+    /// Tell the motion search what the controller says the camera did between the previous frame and the next one ingested: `motion` in
+    /// pixels of the picture (the stick's commanded image motion, see `CameraComp::predict`) and how far to trust it (0..1). `None` clears it.
+    pub fn set_input_prior(&mut self, prior: Option<((f32, f32), f32)>) {
+        self.input_prior = match prior {
+            Some(((x, y), trust)) if x.is_finite() && y.is_finite() && trust > 0.0 => {
+                // half-size pixels, and no further than the search could ever use
+                [(x * 0.5).clamp(-48.0, 48.0), (y * 0.5).clamp(-48.0, 48.0), trust.clamp(0.0, 1.0), 0.0]
+            }
+            _ => [0.0; 4],
+        };
+    }
+
     /// A new real frame. Computes its luma and, when `motion` is wanted and a previous frame exists, the motion field.
     pub fn ingest(&mut self, cmd: &Cmd, frame: Tex, motion: bool) -> Result<(), GpuError> {
         let (w, h) = (frame.width(), frame.height());
@@ -284,7 +442,12 @@ impl Gpu {
         if changed {
             self.luma_cur = None;
             self.luma_prev = None;
+            self.coarse_cur = None;
+            self.coarse_prev = None;
             self.mv = None;
+            self.mv_prev = None;
+            self.mv_tmp = None;
+            self.mv_fresh = false;
             self.mv_snaps.clear();
             self.last_snap = None;
             self.mv1 = None;
@@ -300,7 +463,26 @@ impl Gpu {
             let u = MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite;
             self.luma_cur = Some(make_tex(&self.dev, MTLPixelFormat::R8Unorm, lw, lh, u, false)?);
             self.luma_prev = Some(make_tex(&self.dev, MTLPixelFormat::R8Unorm, lw, lh, u, false)?);
+            let (cw, ch) = (lw.div_ceil(4), lh.div_ceil(4));
+            self.coarse_cur = Some(make_tex(&self.dev, MTLPixelFormat::R8Unorm, cw, ch, u, false)?);
+            self.coarse_prev = Some(make_tex(&self.dev, MTLPixelFormat::R8Unorm, cw, ch, u, false)?);
             self.mv = Some(make_tex(
+                &self.dev,
+                MTLPixelFormat::RGBA16Float,
+                lw.div_ceil(BLOCK),
+                lh.div_ceil(BLOCK),
+                u,
+                false,
+            )?);
+            self.mv_prev = Some(make_tex(
+                &self.dev,
+                MTLPixelFormat::RGBA16Float,
+                lw.div_ceil(BLOCK),
+                lh.div_ceil(BLOCK),
+                u,
+                false,
+            )?);
+            self.mv_tmp = Some(make_tex(
                 &self.dev,
                 MTLPixelFormat::RGBA16Float,
                 lw.div_ceil(BLOCK),
@@ -326,6 +508,13 @@ impl Gpu {
             self.bg = Some(make_tex(&self.dev, MTLPixelFormat::RGBA8Unorm, w, h, u, false)?);
         }
         std::mem::swap(&mut self.luma_cur, &mut self.luma_prev); // last frame's luma becomes "previous"
+        std::mem::swap(&mut self.coarse_cur, &mut self.coarse_prev);
+        let motion_will_run = motion && self.ingested >= 1;
+        let temporal = motion_will_run && self.mv_fresh;
+        if motion_will_run {
+            std::mem::swap(&mut self.mv, &mut self.mv_prev); // last pair's field becomes the prediction
+        }
+        self.mv_fresh = motion_will_run;
         let (lc, lp, mv) =
             (self.luma_cur.as_ref().unwrap(), self.luma_prev.as_ref().unwrap(), self.mv.as_ref().unwrap());
         let (mv1, bg) = (self.mv1.as_ref().unwrap(), self.bg.as_ref().unwrap());
@@ -336,6 +525,13 @@ impl Gpu {
             enc.setTexture_atIndex(Some(lc), 1);
         }
         Self::dispatch(&enc, &self.luma, lw, lh);
+        let (cc, cp) = (self.coarse_cur.as_ref().unwrap(), self.coarse_prev.as_ref().unwrap());
+        enc.setComputePipelineState(&self.down4);
+        unsafe {
+            enc.setTexture_atIndex(Some(lc), 0);
+            enc.setTexture_atIndex(Some(cc), 1);
+        }
+        Self::dispatch(&enc, &self.down4, cc.width(), cc.height());
         enc.setComputePipelineState(&self.reset_stats);
         unsafe { enc.setBuffer_offset_atIndex(Some(&self.stats), 0, 0) };
         Self::dispatch(&enc, &self.reset_stats, 1, 1);
@@ -356,7 +552,26 @@ impl Gpu {
         }
         let motion_run = motion && self.ingested >= 1;
         if motion_run {
-            let p = MeParams { radius: SEARCH_RADIUS, lambda: 0.4 / 255.0, flat: 2.0 / 255.0, conf_scale: 12.0 };
+            let p = MeParams {
+                radius: SEARCH_RADIUS,
+                lambda: ME_LAMBDA,
+                flat: 0.5 / 255.0,
+                conf_scale: 12.0,
+                lambda_refine: REFINE_LAMBDA,
+                temporal: if temporal { 1.0 } else { 0.0 },
+                pad: [0.0; 2],
+            };
+            enc.setComputePipelineState(&self.global_search);
+            unsafe {
+                enc.setTexture_atIndex(Some(cc), 0);
+                enc.setTexture_atIndex(Some(cp), 1);
+                enc.setBuffer_offset_atIndex(Some(&self.gbuf), 0, 0);
+            }
+            let side = 2 * GLOBAL_RADIUS as usize + 1;
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: side, height: side, depth: 1 },
+            );
             enc.setComputePipelineState(&self.motion);
             unsafe {
                 enc.setTexture_atIndex(Some(lc), 0);
@@ -364,8 +579,53 @@ impl Gpu {
                 enc.setTexture_atIndex(Some(mv), 2);
                 enc.setBytes_length_atIndex(NonNull::from(&p).cast(), std::mem::size_of::<MeParams>(), 0);
                 enc.setBuffer_offset_atIndex(Some(&self.stats), 0, 1);
+                enc.setBuffer_offset_atIndex(Some(&self.gbuf), 0, 2);
+                enc.setBytes_length_atIndex(
+                    NonNull::from(&self.input_prior).cast(),
+                    std::mem::size_of::<[f32; 4]>(),
+                    3,
+                );
+                enc.setTexture_atIndex(Some(self.mv_prev.as_ref().unwrap()), 3);
             }
             Self::dispatch(&enc, &self.motion, lw.div_ceil(BLOCK), lh.div_ceil(BLOCK));
+            // ambiguous blocks take the vector of the clear ones around them, one block further each pass
+            let tmp = self.mv_tmp.as_ref().unwrap();
+            enc.setComputePipelineState(&self.propagate);
+            for pass in 0..PROPAGATE_PASSES {
+                let (from, to) = if pass % 2 == 0 { (mv, tmp) } else { (tmp, mv) };
+                unsafe {
+                    enc.setTexture_atIndex(Some(lc), 0);
+                    enc.setTexture_atIndex(Some(lp), 1);
+                    enc.setTexture_atIndex(Some(from), 2);
+                    enc.setTexture_atIndex(Some(to), 3);
+                }
+                Self::dispatch(&enc, &self.propagate, lw.div_ceil(BLOCK), lh.div_ceil(BLOCK));
+            }
+            // what is still ambiguous (an expanse with nothing to match) takes the motion most of the clear blocks have; the passes above
+            // are an odd number, so their result is in `tmp` and this last step writes `mv`
+            enc.setComputePipelineState(&self.dominant_motion);
+            unsafe {
+                enc.setTexture_atIndex(Some(tmp), 0);
+                enc.setBuffer_offset_atIndex(Some(&self.dom_buf), 0, 0);
+            }
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: 1024, height: 1, depth: 1 },
+            );
+            enc.setComputePipelineState(&self.adopt_dominant);
+            unsafe {
+                enc.setTexture_atIndex(Some(lc), 0);
+                enc.setTexture_atIndex(Some(lp), 1);
+                enc.setTexture_atIndex(Some(tmp), 2);
+                enc.setTexture_atIndex(Some(mv), 3);
+                enc.setBuffer_offset_atIndex(Some(&self.dom_buf), 0, 0);
+                enc.setBytes_length_atIndex(
+                    NonNull::from(&self.input_prior).cast(),
+                    std::mem::size_of::<[f32; 4]>(),
+                    1,
+                );
+            }
+            Self::dispatch(&enc, &self.adopt_dominant, lw.div_ceil(BLOCK), lh.div_ceil(BLOCK));
             enc.setComputePipelineState(&self.refine);
             unsafe {
                 enc.setTexture_atIndex(Some(lc), 0);
@@ -399,6 +659,7 @@ impl Gpu {
             Self::dispatch(&enc, &self.bg_update, w, h);
         }
         enc.endEncoding();
+        self.input_prior = [0.0; 4]; // for the one ingest it was set for (the bytes were copied when encoded)
         if motion_run {
             let k = self.snap_next % self.mv_snaps.len().max(1);
             if let (Some(snap), Some(blit)) = (self.mv_snaps.get(k), cmd.blitCommandEncoder()) {
@@ -445,6 +706,25 @@ impl Gpu {
         n as f32 / sampled as f32
     }
 
+    /// The coarse motion field of the latest ingest (8x8 blocks of the half-size picture, so 16 pixels): per block the motion in pixels of the
+    /// picture, the confidence and the share of certainty (1 = clear, 0 = a look-alike matches as well), and the width of the field. For
+    /// tests and tools.
+    #[doc(hidden)]
+    pub fn coarse_motion_field(&self) -> Option<(Vec<[f32; 4]>, usize)> {
+        let mv = self.mv_snaps.get(self.last_snap?)?;
+        let (w, h) = (mv.width(), mv.height());
+        let mut raw = vec![0u16; w * h * 4];
+        unsafe {
+            mv.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+                NonNull::new(raw.as_mut_ptr().cast())?,
+                w * 8,
+                MTLRegion { origin: MTLOrigin { x: 0, y: 0, z: 0 }, size: MTLSize { width: w, height: h, depth: 1 } },
+                0,
+            );
+        }
+        Some((raw.as_chunks::<4>().0.iter().map(|p| p.map(half_to_f32)).collect(), w))
+    }
+
     /// Ring slot holding the motion field of the most recent ingest (see `global_motion_at`).
     pub fn motion_snapshot(&self) -> Option<usize> {
         self.last_snap
@@ -482,13 +762,20 @@ impl Gpu {
         self.prev = None;
         self.luma_cur = None;
         self.luma_prev = None;
+        self.coarse_cur = None;
+        self.coarse_prev = None;
         self.mv = None;
+        self.mv_prev = None;
+        self.mv_tmp = None;
+        self.mv_fresh = false;
         self.mv1 = None;
         self.bg = None;
         self.warp_out = None;
         self.scaler = None;
         self.fx = None;
         self.ingested = 0;
+        self.fsr_out = None;
+        self.fsr_post = None;
     }
 
     /// Whether `compose` can extrapolate yet (it needs the motion between two real frames).
@@ -553,22 +840,48 @@ impl Gpu {
         self.upscale(cmd, shown, out)
     }
 
-    fn upscale(&mut self, cmd: &Cmd, shown: Tex, out: Option<(usize, usize)>) -> Result<(Tex, bool), GpuError> {
+    /// Upscale `shown` to `out` with MetalFX when that is larger than the picture. The scaler runs in linear light and a finishing pass
+    /// (back to sRGB, the sharpness blend, RCAS) makes the picture; when neither is wanted the blend is left to the present pass.
+    pub fn upscale(&mut self, cmd: &Cmd, shown: Tex, out: Option<(usize, usize)>) -> Result<(Tex, bool), GpuError> {
         self.blend = None;
+        self.finish_used = false;
+        self.fsr_used = false;
         let (w, h) = (shown.width(), shown.height());
         if let Some((ow, oh)) = out {
+            if self.fsr && ow > w && oh > h {
+                return self.upscale_fsr(cmd, shown, (ow, oh));
+            }
             if self.spatial_scaler_available && ow > w && oh > h {
                 let key = (w, h, ow, oh);
-                if self.scaler.as_ref().is_none_or(|s| s.key != key) {
-                    self.scaler = Some(self.make_scaler(key)?);
+                let want_linear = self.linear_upscale && self.linear_ok;
+                if self.scaler.as_ref().is_none_or(|s| s.key != key || s.linear != want_linear) {
+                    let s = self.make_scaler(key, want_linear)?;
+                    self.linear_ok = self.linear_ok && (s.linear || !want_linear);
+                    self.scaler = Some(s);
                 }
                 let s = self.scaler.as_ref().unwrap();
+                let k = self.sharpness.clamp(0.0, 2.0);
+                let rcas = rcas_lobe(self.rcas);
+                if let Some(lin) = &s.lin_in {
+                    let enc = cmd.computeCommandEncoder().ok_or(GpuError::Texture("compute encoder"))?;
+                    enc.setComputePipelineState(&self.to_linear);
+                    unsafe {
+                        enc.setTexture_atIndex(Some(&shown), 0);
+                        enc.setTexture_atIndex(Some(lin), 1);
+                    }
+                    Self::dispatch(&enc, &self.to_linear, w, h);
+                    enc.endEncoding();
+                }
                 unsafe {
-                    s.scaler.setColorTexture(Some(&shown));
+                    s.scaler.setColorTexture(Some(s.lin_in.as_ref().unwrap_or(&shown)));
                     s.scaler.setOutputTexture(Some(&s.out));
                     s.scaler.encodeToCommandBuffer(cmd);
                 }
-                let k = self.sharpness.clamp(0.0, 2.0);
+                if s.linear || rcas > 0.0 {
+                    self.encode_finish(cmd, &s.out, &shown, &s.post, k, rcas, s.linear)?;
+                    self.finish_used = true;
+                    return Ok((s.post.clone(), true));
+                }
                 if (k - 1.0).abs() > 0.005 {
                     self.blend = Some((shown.clone(), k)); // blended in the present pass
                 }
@@ -576,6 +889,45 @@ impl Gpu {
             }
         }
         Ok((shown, false))
+    }
+
+    /// Upscale with AMD's FSR 1: EASU into a half-float picture, then the same finishing pass as the MetalFX picture gets (the blend with
+    /// the plain enlargement, then RCAS). Needs only the Metal compute pipeline, so it is there on every Mac that has the GPU renderer.
+    fn upscale_fsr(&mut self, cmd: &Cmd, shown: Tex, (ow, oh): (usize, usize)) -> Result<(Tex, bool), GpuError> {
+        let (w, h) = (shown.width(), shown.height());
+        let u = MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite;
+        if self.fsr_out.as_ref().is_none_or(|t| (t.width(), t.height()) != (ow, oh)) {
+            self.fsr_out = Some(make_tex(&self.dev, MTLPixelFormat::RGBA16Float, ow, oh, u, false)?);
+            self.fsr_post = Some(make_tex(&self.dev, MTLPixelFormat::BGRA8Unorm, ow, oh, u, false)?);
+        }
+        let (up, post) = (self.fsr_out.clone().unwrap(), self.fsr_post.clone().unwrap());
+        let enc = cmd.computeCommandEncoder().ok_or(GpuError::Texture("compute encoder"))?;
+        enc.setComputePipelineState(&self.fsr_easu);
+        let params = [w as f32 / ow as f32, h as f32 / oh as f32, 0.0f32, 0.0];
+        unsafe {
+            enc.setTexture_atIndex(Some(&shown), 0);
+            enc.setTexture_atIndex(Some(&up), 1);
+            enc.setBytes_length_atIndex(NonNull::from(&params).cast(), std::mem::size_of::<[f32; 4]>(), 0);
+        }
+        Self::dispatch(&enc, &self.fsr_easu, ow, oh);
+        enc.endEncoding();
+        self.fsr_used = true;
+        let k = self.sharpness.clamp(0.0, 2.0);
+        let rcas = rcas_lobe(self.rcas);
+        if rcas > 0.0 {
+            self.encode_finish(cmd, &up, &shown, &post, k, rcas, false)?;
+            self.finish_used = true;
+            return Ok((post, true));
+        }
+        if (k - 1.0).abs() > 0.005 {
+            self.blend = Some((shown, k)); // blended in the present pass
+        }
+        Ok((up, true))
+    }
+
+    /// Whether the last upscaled picture was made by FSR.
+    pub fn fsr_active(&self) -> bool {
+        self.fsr_used
     }
 
     /// Smooth mode: the picture at fraction `beta` (0 = previous real frame, 1 = newest) between the last two real frames.
@@ -622,6 +974,21 @@ impl Gpu {
             }
         }
         self.upscale(cmd, shown, out)
+    }
+
+    /// Whether the last upscaled picture went through the finishing pass (linear light, the blend, RCAS).
+    pub fn finish_pass_active(&self) -> bool {
+        self.finish_used
+    }
+
+    /// The MetalFX scaler in use runs in linear light (false: its perceptual mode, or no scaler yet).
+    pub fn linear_active(&self) -> bool {
+        self.scaler.as_ref().is_some_and(|s| s.linear)
+    }
+
+    /// Linear light was asked for but this Mac could not create that scaler, so the perceptual mode is used.
+    pub fn linear_unavailable(&self) -> bool {
+        !self.linear_ok
     }
 
     /// Feed the interpolator the last two real frames and our motion field; its output is the picture halfway between them.
@@ -707,28 +1074,87 @@ impl Gpu {
         self.fx_use && self.fx.as_ref().is_some_and(|f| f.frames >= 4)
     }
 
-    fn make_scaler(&self, key: (usize, usize, usize, usize)) -> Result<Scaler, GpuError> {
-        let d = unsafe { MTLFXSpatialScalerDescriptor::new() };
+    /// The finishing pass: `up` (the upscaler's picture, in linear light when `linear`) blended with the plain enlargement of `plain` by `k`,
+    /// then RCAS with lobe scale `rcas`, into `post`. The kernel works in 16x16 tiles (see its comment), so the grid is a whole number of them.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_finish(
+        &self,
+        cmd: &Cmd,
+        up: &Tex,
+        plain: &Tex,
+        post: &Tex,
+        k: f32,
+        rcas: f32,
+        linear: bool,
+    ) -> Result<(), GpuError> {
+        let enc = cmd.computeCommandEncoder().ok_or(GpuError::Texture("compute encoder"))?;
+        enc.setComputePipelineState(&self.finish_up);
+        let params = [k, rcas, if linear { 1.0f32 } else { 0.0 }, 0.0];
         unsafe {
-            d.setInputWidth(key.0);
-            d.setInputHeight(key.1);
-            d.setOutputWidth(key.2);
-            d.setOutputHeight(key.3);
-            d.setColorTextureFormat(MTLPixelFormat::BGRA8Unorm);
-            d.setOutputTextureFormat(MTLPixelFormat::BGRA8Unorm);
-            d.setColorProcessingMode(MTLFXSpatialScalerColorProcessingMode::Perceptual);
+            enc.setTexture_atIndex(Some(up), 0);
+            enc.setTexture_atIndex(Some(plain), 1);
+            enc.setTexture_atIndex(Some(post), 2);
+            enc.setBytes_length_atIndex(NonNull::from(&params).cast(), std::mem::size_of::<[f32; 4]>(), 0);
         }
-        let scaler =
-            unsafe { d.newSpatialScalerWithDevice(&self.dev) }.ok_or(GpuError::Pipeline("MetalFX scaler".into()))?;
-        let out = make_tex(
+        // whole threadgroups, so a group at the edge is not partial: every thread of a group loads its part of the shared tile
+        enc.dispatchThreadgroups_threadsPerThreadgroup(
+            MTLSize { width: post.width().div_ceil(16), height: post.height().div_ceil(16), depth: 1 },
+            MTLSize { width: 16, height: 16, depth: 1 },
+        );
+        enc.endEncoding();
+        Ok(())
+    }
+
+    fn make_scaler(&self, key: (usize, usize, usize, usize), linear: bool) -> Result<Scaler, GpuError> {
+        let build = |linear: bool| {
+            let fmt = if linear { MTLPixelFormat::RGBA16Float } else { MTLPixelFormat::BGRA8Unorm };
+            let d = unsafe { MTLFXSpatialScalerDescriptor::new() };
+            unsafe {
+                d.setInputWidth(key.0);
+                d.setInputHeight(key.1);
+                d.setOutputWidth(key.2);
+                d.setOutputHeight(key.3);
+                d.setColorTextureFormat(fmt);
+                d.setOutputTextureFormat(fmt);
+                d.setColorProcessingMode(if linear {
+                    MTLFXSpatialScalerColorProcessingMode::Linear
+                } else {
+                    MTLFXSpatialScalerColorProcessingMode::Perceptual
+                });
+            }
+            unsafe { d.newSpatialScalerWithDevice(&self.dev) }.map(|s| (s, fmt))
+        };
+        let (scaler, fmt, linear) = match (linear, build(linear)) {
+            (_, Some((s, f))) => (s, f, linear),
+            (true, None) => {
+                let (s, f) = build(false).ok_or(GpuError::Pipeline("MetalFX scaler".into()))?;
+                (s, f, false)
+            }
+            (false, None) => return Err(GpuError::Pipeline("MetalFX scaler".into())),
+        };
+        let out =
+            make_tex(&self.dev, fmt, key.2, key.3, MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead, false)?;
+        let lin_in = if linear {
+            Some(make_tex(
+                &self.dev,
+                MTLPixelFormat::RGBA16Float,
+                key.0,
+                key.1,
+                MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+                false,
+            )?)
+        } else {
+            None
+        };
+        let post = make_tex(
             &self.dev,
             MTLPixelFormat::BGRA8Unorm,
             key.2,
             key.3,
-            MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
+            MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
             false,
         )?;
-        Ok(Scaler { key, scaler, out })
+        Ok(Scaler { key, scaler, out, linear, lin_in, post })
     }
 
     /// Draw `tex` letterboxed (aspect preserved) into `target`.
@@ -752,7 +1178,47 @@ impl Gpu {
         if r.0.abs() < 0.5 && r.1.abs() < 0.5 && (r.2 - tw).abs() < 0.5 && (r.3 - th).abs() < 0.5 {
             unsafe { pass.colorAttachments().objectAtIndexedSubscript(0).setLoadAction(MTLLoadAction::DontCare) };
         }
+        let bars = bar_rects(r, (tw, th));
+        let glowing = self.immersion && !bars.is_empty();
+        if glowing {
+            // the picture shrunk to a tiny image, which the bars are then made from
+            let gp = MTLRenderPassDescriptor::new();
+            unsafe {
+                let a = gp.colorAttachments().objectAtIndexedSubscript(0);
+                a.setTexture(Some(&self.glow));
+                a.setLoadAction(MTLLoadAction::DontCare);
+                a.setStoreAction(MTLStoreAction::Store);
+            }
+            let ge = cmd.renderCommandEncoderWithDescriptor(&gp).ok_or(GpuError::Texture("render encoder"))?;
+            ge.setRenderPipelineState(&self.glow_down);
+            unsafe {
+                ge.setFragmentTexture_atIndex(Some(tex), 0);
+                let cell = [1.0 / GLOW_SIZE.0 as f32, 1.0 / GLOW_SIZE.1 as f32];
+                ge.setFragmentBytes_length_atIndex(NonNull::from(&cell).cast(), std::mem::size_of::<[f32; 2]>(), 0);
+                ge.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+            }
+            ge.endEncoding();
+        }
         let enc = cmd.renderCommandEncoderWithDescriptor(&pass).ok_or(GpuError::Texture("render encoder"))?;
+        if glowing {
+            enc.setRenderPipelineState(&self.ambient);
+            enc.setViewport(MTLViewport { originX: 0.0, originY: 0.0, width: tw, height: th, znear: 0.0, zfar: 1.0 });
+            unsafe {
+                enc.setFragmentTexture_atIndex(Some(&self.glow), 0);
+                let params = [tw as f32, th as f32, AMBIENT_DIM, AMBIENT_RADIUS];
+                enc.setFragmentBytes_length_atIndex(NonNull::from(&params).cast(), std::mem::size_of::<[f32; 4]>(), 0);
+            }
+            for (x, y, w, h) in &bars {
+                enc.setScissorRect(MTLScissorRect {
+                    x: *x as usize,
+                    y: *y as usize,
+                    width: *w as usize,
+                    height: *h as usize,
+                });
+                unsafe { enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3) };
+            }
+            enc.setScissorRect(MTLScissorRect { x: 0, y: 0, width: tw as usize, height: th as usize });
+        }
         enc.setRenderPipelineState(&self.present);
         enc.setViewport(MTLViewport { originX: r.0, originY: r.1, width: r.2, height: r.3, znear: 0.0, zfar: 1.0 });
         unsafe {
@@ -774,6 +1240,28 @@ impl Gpu {
     }
 }
 
+/// The parts of a `target`-sized window not covered by the picture rectangle `r` (x, y, width, height), as whole-pixel scissor rectangles
+/// (x, y, width, height): left and right of a pillarboxed picture, above and below a letterboxed one. They overlap the picture by a
+/// pixel so a fractional edge leaves no black line (the picture is drawn over them).
+pub fn bar_rects(r: (f64, f64, f64, f64), target: (f64, f64)) -> Vec<(u32, u32, u32, u32)> {
+    let (tw, th) = (target.0.floor() as i64, target.1.floor() as i64);
+    let mut out = vec![];
+    let (left, right) = (r.0.ceil() as i64 + 1, (r.0 + r.2).floor() as i64 - 1);
+    let (top, bottom) = (r.1.ceil() as i64 + 1, (r.1 + r.3).floor() as i64 - 1);
+    if r.0 > 0.5 {
+        out.push((0, 0, left.clamp(0, tw) as u32, th as u32));
+        if right < tw {
+            out.push((right.max(0) as u32, 0, (tw - right.max(0)) as u32, th as u32));
+        }
+    } else if r.1 > 0.5 {
+        out.push((0, 0, tw as u32, top.clamp(0, th) as u32));
+        if bottom < th {
+            out.push((0, bottom.max(0) as u32, tw as u32, (th - bottom.max(0)) as u32));
+        }
+    }
+    out
+}
+
 /// Aspect-fit `(w, h)` into `(tw, th)`: returns (x, y, width, height) and the scale factor.
 pub fn fit(w: f64, h: f64, tw: f64, th: f64) -> ((f64, f64, f64, f64), f64) {
     if w <= 0.0 || h <= 0.0 || tw <= 0.0 || th <= 0.0 {
@@ -784,19 +1272,15 @@ pub fn fit(w: f64, h: f64, tw: f64, th: f64) -> ((f64, f64, f64, f64), f64) {
     (((tw - fw) / 2.0, (th - fh) / 2.0, fw, fh), s)
 }
 
-/// Size to upscale to: the video aspect-fitted into the drawable, never above the chosen mode's height, and `None`
-/// when that is not larger than the source (nothing to gain).
+/// Size to upscale to: the chosen multiple of the stream (`mode_height` tall, the video's aspect), whatever the window is. A window
+/// smaller than that gets the picture scaled down to fit, which looks better than upscaling to the window's own size (it is
+/// supersampled). `None` when that is not larger than the video, when there is no window yet, or when the GPU could not make it.
 pub fn upscale_target(src: (usize, usize), drawable: (usize, usize), mode_height: usize) -> Option<(usize, usize)> {
-    if src.0 == 0 || src.1 == 0 || drawable.0 == 0 || drawable.1 == 0 {
+    if src.0 == 0 || src.1 == 0 || drawable.0 == 0 || drawable.1 == 0 || mode_height == 0 {
         return None;
     }
-    let (r, _) = fit(src.0 as f64, src.1 as f64, drawable.0 as f64, drawable.1 as f64);
-    let (mut ow, mut oh) = (r.2.round() as usize, r.3.round() as usize);
-    if oh > mode_height && mode_height > 0 {
-        ow = (ow as f64 * mode_height as f64 / oh as f64).round() as usize;
-        oh = mode_height;
-    }
-    let (ow, oh) = (ow & !1, oh & !1); // even sizes
+    let ow = (src.0 as f64 * mode_height as f64 / src.1 as f64).round() as usize;
+    let (ow, oh) = (ow & !1, mode_height & !1); // even sizes
     (ow > src.0 && oh > src.1 && ow <= MAX_TEXTURE_DIM && oh <= MAX_TEXTURE_DIM).then_some((ow, oh))
 }
 

@@ -1,9 +1,10 @@
 #!/bin/zsh
-# Create a drag-and-drop macOS installer. Usage: scripts/make-dmg.sh [--output FILE] [--demo]
+# Create a drag-and-drop macOS installer. Usage: scripts/make-dmg.sh [--output FILE] [--demo] [--release]
 set -euo pipefail
 cd "${0:A:h}/.."
 
 output=""
+channel="-Pre-release"
 extra=()
 while (( $# )); do
   case $1 in
@@ -13,6 +14,7 @@ while (( $# )); do
       output=${1/#\~/$HOME}
       ;;
     --demo) extra+=(--demo) ;;
+    --release) channel="" ;;
     -h|--help) sed -n '2p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -25,7 +27,7 @@ command -v hdiutil >/dev/null || { echo "hdiutil is required to create a DMG." >
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
 [[ -n $version ]] || { echo "could not read the app version from src-tauri/Cargo.toml" >&2; exit 1; }
 arch=$(uname -m)
-[[ -n $output ]] || output="$PWD/target/openps_${version}_macos_${arch}-Pre-release.dmg"
+[[ -n $output ]] || output="$PWD/target/openps_${version}_macos_${arch}${channel}.dmg"
 [[ $output == /* ]] || output="$PWD/$output"
 [[ ! -d $output ]] || { echo "output path is a directory: $output" >&2; exit 1; }
 

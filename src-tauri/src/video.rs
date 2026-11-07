@@ -110,21 +110,34 @@ impl PictureSink for Output {
     }
 }
 
-/// The render settings a set of stream options asks for.
+/// The highest rate frame generation asks for when it is on: the display's own refresh rate caps it (and the adaptive frame rate lowers it
+/// in steps of 5 fps when the Mac cannot keep it up), so there is no rate to choose.
+pub const AUTO_RATE_HZ: u16 = 240;
+
+/// The render settings a set of stream options asks for. A switched-off filter becomes the value that leaves the picture as it was:
+/// sharpness blend 100 % with an upscaler (the picture as it draws it) or 50 % without (no unsharp mask), adaptive sharpening 0,
+/// saturation 100 %.
 pub fn render_settings(o: &StreamOptions) -> RenderSettings {
+    let upscale = Upscale::from_factor(o.upscale_factor());
+    let plain_sharpness = if upscale == Upscale::Off { 0.5 } else { 1.0 };
     RenderSettings {
-        upscale: match o.upscale.as_str() {
-            "1440p" => Upscale::Qhd,
-            "2160p" => Upscale::Uhd,
-            _ => Upscale::Off,
-        },
-        display_hz: if (30..=240).contains(&o.display_fps) { o.display_fps } else { 60 },
-        gen_factor: if o.frame_gen > 0 { f32::from(o.frame_gen) / 10.0 } else { 0.0 },
+        upscale,
+        // on: fill the display (the renderer never goes above its refresh rate); off: frames as they arrive (the stream's own rate)
+        display_hz: AUTO_RATE_HZ,
+        gen_factor: if o.framegen_on { 0.0 } else { 1.0 },
         mode: if o.frame_mode == "smooth" { FrameMode::Smooth } else { FrameMode::ZeroLatency },
         camera: o.camera_comp,
-        metalfx: o.framegen == "metalfx",
-        sharpness: f32::from(o.sharpness.min(200)) / 100.0,
-        saturation: f32::from(o.saturation.min(200)) / 100.0,
+        // the engine upscales (MetalFX's scaler or FSR); MetalFX makes the midpoints at about 2x with either, our own interpolator the rest
+        metalfx: true,
+        fsr: o.engine == "fsr",
+        linear_light: o.linear_light,
+        adaptive: o.adaptive_fps,
+        jitter_buffer: o.pacing_buffer,
+        uncapped: o.uncapped_rate,
+        sharpness: if o.sharpness_on { f32::from(o.sharpness.min(200)) / 100.0 } else { plain_sharpness },
+        rcas: if o.rcas_on { f32::from(o.rcas.min(200)) / 100.0 } else { 0.0 },
+        saturation: if o.saturation_on { f32::from(o.saturation.min(200)) / 100.0 } else { 1.0 },
+        immersion: o.immersion,
     }
 }
 
@@ -260,19 +273,43 @@ impl Video {
             Backend::System(_) => serde_json::json!({ "renderer": "system" }),
             Backend::Metal(m) => {
                 let s = m.stats();
-                serde_json::json!({
+                let mut stats = serde_json::json!({
                     "renderer": "metal",
                     "real_frames": s.real_frames, "presented": s.presented, "generated": s.generated,
                     "mailbox_drops": s.mailbox_drops, "errors": s.errors,
                     "source_fps": s.source_fps, "content_fps": s.content_fps, "repeat_share": s.repeat_share, "target_hz": s.target_hz, "processed_fps": s.processed_fps,
                     "present_interval_ms": s.present_interval_ms, "present_jitter_ms": s.present_jitter_ms,
                     "present_max_ms": s.present_max_ms, "shown_interval_ms": s.shown_interval_ms, "shown_jitter_ms": s.shown_jitter_ms, "shown_max_ms": s.shown_max_ms, "shown_late": s.shown_late, "shown_hist": s.shown_hist, "frame_wait_ms": s.frame_wait_ms, "gpu_ms": s.gpu_ms,
-                    "queue_delay_ms": s.queue_delay_ms, "network_jitter_ms": s.network_jitter_ms,
-                    "upscaled": s.upscaled, "generating": s.generating,
-                    "camera_active": s.camera_active, "camera_lag_ms": s.camera_lag_ms, "camera_explained": s.camera_explained,
+                    "queue_delay_ms": s.queue_delay_ms, "network_jitter_ms": s.network_jitter_ms, "playout_ms": s.playout_ms, "uncapped_active": s.uncapped_active,
+                    "upscaled": s.upscaled, "upscale_height": s.upscale_height, "generating": s.generating,
+                    "camera_active": s.camera_active, "camera_lag_ms": s.camera_lag_ms, "camera_explained": s.camera_explained, "input_prior_active": s.input_prior_active,
                     "drawable": [s.drawable_size.0, s.drawable_size.1],
-                    "effective_hz": s.effective_hz, "refresh_hz": s.refresh_hz, "present_latency_ms": s.present_latency_ms, "metalfx_active": s.metalfx_active, "metalfx_available": s.metalfx_available, "variable_refresh": s.variable_refresh,  "drawables": s.drawables,
-                })
+                    "effective_hz": s.effective_hz, "refresh_hz": s.refresh_hz, "present_latency_ms": s.present_latency_ms, "metalfx_active": s.metalfx_active, "metalfx_available": s.metalfx_available, "fsr_active": s.fsr_active, "variable_refresh": s.variable_refresh,  "drawables": s.drawables,
+                });
+                // more outside the macro, which has a recursion limit on the number of keys: what the debug bar shows
+                let c = s.settings;
+                stats["finish_pass"] = serde_json::Value::Bool(s.finish_pass);
+                stats["linear_active"] = serde_json::Value::Bool(s.linear_active);
+                stats["linear_unavailable"] = serde_json::Value::Bool(s.linear_unavailable);
+                stats["rcas_active"] = serde_json::Value::Bool(s.rcas_active);
+                stats["gpu_inflight"] = s.gpu_inflight.into();
+                stats["mailbox_len"] = s.mailbox_len.into();
+                stats["finish_guard"] = serde_json::json!({
+                    "off": s.finish_guard_off, "slow": s.finish_guard_slow, "limit": s.finish_guard_limit, "ms": s.finish_guard_ms,
+                });
+                stats["adaptive"] = serde_json::json!({
+                    "on": s.adaptive, "asked_hz": s.asked_hz, "cap_hz": s.adaptive_cap_hz, "load": s.adaptive_load, "peak": s.adaptive_peak,
+                    "over_s": s.adaptive_over_s, "down_after_s": openps_metal::ladder::DOWN_AFTER_S,
+                    "heavy_mean": openps_metal::ladder::HEAVY_MEAN, "heavy_peak": openps_metal::ladder::HEAVY_PEAK,
+                    "step_hz": openps_metal::ladder::STEP_HZ,
+                });
+                stats["config"] = serde_json::json!({
+                    "upscale_factor": c.upscale.factor(), "display_hz": c.display_hz, "gen_factor": c.gen_factor,
+                    "smooth": c.mode == FrameMode::Smooth, "camera": c.camera, "metalfx": c.metalfx, "fsr": c.fsr,
+                    "linear_light": c.linear_light, "adaptive": c.adaptive,
+                    "sharpness": c.sharpness, "rcas": c.rcas, "saturation": c.saturation, "immersion": c.immersion,
+                });
+                stats
             }
         }
     }

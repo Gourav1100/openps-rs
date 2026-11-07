@@ -2,42 +2,47 @@
 //! (Own test binary so the allocator hook does not disturb other tests.)
 use openps_stream::video::{Unit, VideoAssembler, MAX_PENDING_FRAMES, MAX_UNITS};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::cell::Cell;
 
 struct Counting;
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    // Per thread, so the test harness's own threads and the other tests running at the same time are not counted in a measurement.
+    // A const-initialised `Cell` needs no allocation to set up, which a global allocator hook requires.
+    static LIVE: Cell<isize> = const { Cell::new(0) };
+}
+
+fn add(n: isize) {
+    let _ = LIVE.try_with(|c| c.set(c.get() + n));
+}
+
+fn live_now() -> isize {
+    LIVE.with(Cell::get)
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         let p = System.alloc(l);
         if !p.is_null() {
-            let now = LIVE.fetch_add(l.size(), Relaxed) + l.size();
-            PEAK.fetch_max(now, Relaxed);
+            add(l.size() as isize);
         }
         p
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         let p = System.alloc_zeroed(l);
         if !p.is_null() {
-            let now = LIVE.fetch_add(l.size(), Relaxed) + l.size();
-            PEAK.fetch_max(now, Relaxed);
+            add(l.size() as isize);
         }
         p
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         System.dealloc(p, l);
-        LIVE.fetch_sub(l.size(), Relaxed);
+        add(-(l.size() as isize));
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         let q = System.realloc(p, l, n);
         if !q.is_null() {
-            if n >= l.size() {
-                let now = LIVE.fetch_add(n - l.size(), Relaxed) + (n - l.size());
-                PEAK.fetch_max(now, Relaxed);
-            } else {
-                LIVE.fetch_sub(l.size() - n, Relaxed);
-            }
+            add(n as isize - l.size() as isize);
         }
         q
     }
@@ -49,7 +54,7 @@ static A: Counting = Counting;
 /// (block = 65000 B) and only 2-byte payloads. Returns (wire bytes fed, bytes allocated live afterwards).
 fn flood(frames: u16, units: u16, fec: u16) -> (usize, usize) {
     let mut a = VideoAssembler::new(3);
-    let before = LIVE.load(Relaxed);
+    let before = live_now();
     let mut wire = 0;
     let pad = 64_998u16.to_be_bytes();
     let k = units - fec;
@@ -67,7 +72,7 @@ fn flood(frames: u16, units: u16, fec: u16) -> (usize, usize) {
             wire += 2 + 29;
         }
     }
-    let live = LIVE.load(Relaxed) - before;
+    let live = (live_now() - before).max(0) as usize;
     drop(a);
     (wire, live)
 }
@@ -95,7 +100,7 @@ fn incomplete_frames_do_not_amplify_memory() {
 #[test]
 fn accepted_blocks_are_stored_at_real_length() {
     let mut a = VideoAssembler::new(3);
-    let before = LIVE.load(Relaxed);
+    let before = live_now();
     let pad = 1534u16.to_be_bytes();
     let mut wire = 0;
     for f in 0..MAX_PENDING_FRAMES as u16 {
@@ -111,7 +116,7 @@ fn accepted_blocks_are_stored_at_real_length() {
             wire += 2 + 29;
         }
     }
-    let live = LIVE.load(Relaxed) - before;
+    let live = (live_now() - before).max(0) as usize;
     println!("{wire} B on the wire -> {live} B live");
     assert!(live < 64 * wire, "{live}");
 }

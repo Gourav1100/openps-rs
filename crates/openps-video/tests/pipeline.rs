@@ -143,3 +143,21 @@ fn a_skipped_frame_id_blocks_delta_frames_until_the_next_keyframe() {
     assert_eq!(q.push(&a).pictures.len(), 1);
     assert_eq!(q.push(&b).pictures.len(), 1);
 }
+
+#[test]
+fn a_rebuilt_decoder_session_resumes_at_the_next_keyframe() {
+    use openps_video::nal::ParameterSets;
+    use openps_video::vt::{Decoder, Error};
+    let us = units(Codec::H264, "h264.annexb");
+    let header = header_of(Codec::H264, "h264.annexb");
+    let mut dec = Decoder::new(Codec::H264, ParameterSets::from_annex_b(Codec::H264, &header)).unwrap();
+    assert_eq!(dec.decode_annex_b(&us[0].data, 0).unwrap().len(), 1);
+    assert_eq!(dec.decode_annex_b(&us[1].data, 1500).unwrap().len(), 1);
+    dec.rebuild().expect("a new session from the same parameter sets");
+    assert!(
+        matches!(dec.decode_annex_b(&us[2].data, 3000), Err(Error::NeedKeyframe)),
+        "a delta frame has no reference in the new session"
+    );
+    assert_eq!(dec.decode_annex_b(&us[15].data, 4500).unwrap().len(), 1, "the next keyframe resumes output");
+    assert_eq!(dec.decode_annex_b(&us[16].data, 6000).unwrap().len(), 1);
+}

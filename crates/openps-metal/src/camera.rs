@@ -180,6 +180,21 @@ impl CameraComp {
         }
     }
 
+    /// The image motion (pixels of the picture) the stick has commanded between two real frames, from what was learned of the game's response:
+    /// the global motion to expect between content times `t_prev` and `t`, and how far to trust it (the share of the measured motion the stick
+    /// has explained, 0.5..1). `None` while the stick does not demonstrably drive the camera. The motion search takes it as a starting point,
+    /// so a pan is found where the picture alone cannot say (a row of identical lines, a wall with nothing to match, a pan faster than the
+    /// search reaches).
+    pub fn predict(&self, t_prev: f64, t: f64) -> Option<((f32, f32), f32)> {
+        let e = self.est.filter(|e| e.explained >= MIN_EXPLAINED * 0.85)?;
+        if !(t > t_prev && t.is_finite() && t_prev.is_finite()) {
+            return None;
+        }
+        let (ix, iy) = self.look.integral(t_prev - e.lag, t - e.lag);
+        let m = ((e.gain.0 * ix) as f32, (e.gain.1 * iy) as f32);
+        (m.0.is_finite() && m.1.is_finite()).then_some((m, e.explained.clamp(0.5, 1.0) as f32))
+    }
+
     /// The rotation (image pixels) that has been commanded since the newest frame's content time minus the lag, and so is
     /// missing from that frame at display time `now`. `None` when the stick does not (yet) demonstrably drive the camera.
     pub fn shift(&self, frame_content_time: f64, now: f64) -> Option<(f32, f32)> {
@@ -323,6 +338,40 @@ mod tests {
             assert!(comp < extrap * 0.30, "compensated {comp:.2} should be far below extrapolation {extrap:.2}");
             assert!(comp < none * 0.25);
         }
+    }
+
+    #[test]
+    fn it_predicts_the_motion_between_two_frames_from_the_stick_before_the_picture_shows_it() {
+        let (lag, gain) = (0.095, (900.0, 600.0));
+        let w = run(1, |_| gain, lag, 14.0, 0.4, 0.02);
+        let (mut worst, mut seen, mut moving) = (0.0f64, 0, 0);
+        for k in 200..800 {
+            let (t0, t1) = (0.3 + f64::from(k - 1) * I, 0.3 + f64::from(k) * I);
+            let truth = {
+                let (ix, iy) = w.instant.integral(t0 - lag, t1 - lag);
+                (gain.0 * ix, gain.1 * iy)
+            };
+            let Some((m, trust)) = w.cam.predict(t0, t1) else { continue };
+            seen += 1;
+            assert!((0.5..=1.0).contains(&trust), "{trust}");
+            if truth.0.abs() > 3.0 {
+                moving += 1;
+                worst = worst.max((f64::from(m.0) - truth.0).abs() / truth.0.abs());
+            }
+        }
+        assert!(seen > 500, "a prediction for nearly every frame once it has learned: {seen}");
+        assert!(
+            moving > 50 && worst < 0.15,
+            "the predicted motion is within 15 % of what the camera did: {worst:.3} over {moving} frames"
+        );
+        // nothing learned, or a nonsense interval: no prediction
+        let fresh = CameraComp::new(SharedLook::new());
+        assert!(fresh.predict(0.0, 0.016).is_none());
+        assert!(
+            w.cam.predict(1.0, 1.0).is_none()
+                && w.cam.predict(2.0, 1.0).is_none()
+                && w.cam.predict(f64::NAN, 1.0).is_none()
+        );
     }
 
     #[test]

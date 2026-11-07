@@ -1,7 +1,7 @@
 # OpenPS
 
 <span>A native macOS client for **PlayStation Remote Play** (PS5 and PS4), written in Rust with a Tauri shell.</span>
-Hardware video decode (VideoToolbox), Metal rendering with optional MetalFX upscaling and frame generation, keyboard-and-mouse play, and everything stored inside the app.
+Hardware video decode (VideoToolbox), Metal rendering with optional MetalFX or FSR upscaling, frame generation (built-in or MetalFX), an adaptive frame rate that steps down in 15 fps steps instead of dropping filters, an opt-in immersion mode, keyboard-and-mouse play, and everything stored inside the app.
 
 > **Status: pre-release.** The whole stack is implemented and tested against a built-in demo console and mock consoles written from the
 > same specification. **It has not been tried against a real PlayStation yet.** Treat it as a build you are helping validate.
@@ -40,7 +40,7 @@ Nothing is written outside this folder. The only thing the scripts never do is i
 
 Nothing has to be supplied. The Remote Play key tables and the PSN client constants are compiled in (`crates/openps-rp/src/builtin_tables.json`, `crates/openps-psn/src/builtin_psn.json`), and the installer builds with PSN sign-in on. They are the constants of Sony's own Remote Play apps, used here without Sony's permission (see the notes in `docs/USAGE.md`); do not publish a build or a repository you do not want associated with that.
 
-Optional overrides, for testing other values: put `psn.json` and/or `tables.json` in the app's data folder (`openps-data/`), or point `OPENPS_PSN` / `OPENPS_TABLES` at them. `scripts/install.sh --psn-config F --tables F` copies override files into the installed app; `--no-credentials` ignores `./openps-data`.
+Optional overrides, for testing other values: put `psn.json` and/or `tables.json` in the app's data folder (`openps-data/`), or point `OPENPS_PSN` / `OPENPS_TABLES` at them. `scripts/install.sh --psn-config F --tables F` copies override files into the installed app; `--no-credentials` ignores `./openps-data`. The same folder can hold your key map (`input.toml`) and the game-to-profile map (`game-keymaps.json`): a fresh install starts with them, and an existing key map in the app is never overwritten.
 
 Then follow `docs/USAGE.md` to pair and play.
 
@@ -63,7 +63,7 @@ Everything (pairings, settings, registration keys, key map, logs) is in `openps-
 | `openps-core` | application core: console store, pairing and connect flows, events (no UI dependency) |
 | `openps-video` | H.264/HEVC handling and VideoToolbox decode, system-layer fallback renderer |
 | `openps-audio` | Opus decode (AudioToolbox), AudioQueue playback with jitter buffer |
-| `openps-metal` | Metal renderer: content clock, motion-compensated frame generation, MetalFX upscaling, camera compensation |
+| `openps-metal` | Metal renderer: content clock, motion-compensated frame generation, MetalFX and FSR (EASU) upscaling, adaptive frame rate, immersion background, camera compensation |
 | `openps-remote` | PSN remote registration of a PS5: session signaling, UDP hole punch, reliable-UDP register request, live push WebSocket (feature `live`) |
 | `openps-demo`, `openps-testkit` | pretend PS5 for the demo and end-to-end tests; mock console for tests |
 | `src-tauri` | Tauri shell: commands and events over `openps-core` |

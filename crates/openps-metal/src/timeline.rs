@@ -30,6 +30,14 @@ const BURST_RATIO: f64 = 0.85;
 const MAX_BASE_SLEW: f64 = 60e-6;
 /// Longest advance (in frame intervals) the renderer may apply to a frame. Beyond this we hold rather than invent more.
 pub const MAX_ALPHA: f64 = 1.25;
+/// The most the smoothing buffer of Smooth mode may delay the picture (seconds).
+pub const MAX_PLAYOUT: f64 = 0.025;
+/// The share of the recent frames that the smoothing buffer covers: a frame later than this share of the others still causes a hold.
+const PLAYOUT_QUANTILE: f64 = 0.98;
+/// How fast the buffer may grow and shrink per frame (seconds). A change moves the content back or forward in time, so it is slow: a
+/// gentle drift is not seen, a jump would be.
+const PLAYOUT_UP: f64 = 0.0004;
+const PLAYOUT_DOWN: f64 = 0.0001;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TimelineStats {
@@ -59,6 +67,11 @@ pub struct Timeline {
     gaps: u64,
     warmup: u64,
     late_run: u32,
+    /// How late (beyond the best case) the recent frames arrived, seconds.
+    delays: VecDeque<f64>,
+    /// The smoothing buffer is on, and how much it delays Smooth mode's picture now (seconds).
+    buffer: bool,
+    playout: f64,
 }
 
 impl Default for Timeline {
@@ -91,13 +104,36 @@ impl Timeline {
             gaps: 0,
             warmup: WARMUP,
             late_run: 0,
+            delays: VecDeque::new(),
+            buffer: false,
+            playout: 0.0,
         }
     }
 
     pub fn reset(&mut self) {
-        let w = self.warmup;
+        let (w, b) = (self.warmup, self.buffer);
         *self = Self::new(self.interval);
         self.warmup = w;
+        self.buffer = b;
+    }
+
+    /// Switch the smoothing buffer of Smooth mode on or off. On, the picture is held back by how late the slowest frames usually are (at most
+    /// [`MAX_PLAYOUT`]), so a frame that arrives late still arrives before it is needed and the motion does not stall; off, the picture is
+    /// as early as the network's best case ever allowed, and every late frame is a hold.
+    pub fn set_buffer(&mut self, on: bool) {
+        self.buffer = on;
+        if !on {
+            self.playout = 0.0;
+        }
+    }
+
+    /// How much the smoothing buffer delays Smooth mode's picture now, seconds (0 when it is off).
+    pub fn playout(&self) -> f64 {
+        if self.buffer {
+            self.playout
+        } else {
+            0.0
+        }
     }
 
     pub fn interval(&self) -> f64 {
@@ -219,6 +255,21 @@ impl Timeline {
             self.late_run = 0;
             q = 0.0;
         }
+        self.delays.push_back(q);
+        while self.delays.len() > WINDOW {
+            self.delays.pop_front();
+        }
+        if self.buffer && self.delays.len() >= 30 && self.frames >= self.warmup {
+            let mut d: Vec<f64> = self.delays.iter().copied().collect();
+            d.sort_by(f64::total_cmp);
+            let target =
+                d[((d.len() as f64 * PLAYOUT_QUANTILE).ceil() as usize).clamp(1, d.len()) - 1].min(MAX_PLAYOUT);
+            self.playout = if target > self.playout {
+                (self.playout + PLAYOUT_UP).min(target)
+            } else {
+                (self.playout - PLAYOUT_DOWN).max(target)
+            };
+        }
         self.queue_delay += (q - self.queue_delay) * 0.1;
         self.jitter += ((q - self.queue_delay).abs() - self.jitter) * 0.1;
         self.last_id = Some(id);
@@ -248,7 +299,8 @@ impl Timeline {
 
     /// Smooth (interpolating) mode: the fraction between the previous real frame (0) and the newest (1) that the content clock
     /// currently points at. The clock is held back by one source interval, so the newest frame is first *shown* when the next
-    /// one arrives: that hold-back is the latency cost of interpolation. `prev_raw_id` is the previously shown real frame.
+    /// one arrives: that hold-back is the latency cost of interpolation. With the smoothing buffer on it is held back further by how late the
+    /// slowest recent frames were, so a late frame is still there in time. `prev_raw_id` is the previously shown real frame.
     pub fn interp_beta(&self, now: f64, prev_raw_id: u16) -> f32 {
         let (Some(base), Some(id)) = (self.base, self.last_id) else { return 1.0 };
         let prev = self.unwrap(prev_raw_id);
@@ -256,7 +308,7 @@ impl Timeline {
             return 1.0;
         }
         let (t_prev, t_cur) = (base + prev as f64 * self.interval, base + id as f64 * self.interval);
-        let t_content = now - self.interval; // one interval behind the arrival clock
+        let t_content = now - self.interval - self.playout(); // one interval (and the smoothing buffer) behind the arrival clock
         (((t_content - t_prev) / (t_cur - t_prev)).clamp(0.0, 1.0)) as f32
     }
 
@@ -318,6 +370,94 @@ mod tests {
 
     fn rms(v: &[f64]) -> f64 {
         (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt()
+    }
+
+    /// Smooth mode: at every display tick the picture needs the next real frame once the content clock (held back by one interval and the
+    /// buffer) passes the newest one; if that frame has not arrived the picture holds. Returns the longest hold in seconds and the total, from
+    /// the moment the buffer has had time to settle, and the buffer at the end.
+    fn holds(buffer: bool, arrival_of: impl Fn(u16) -> f64, frames: u16) -> (f64, f64, f64) {
+        let mut tl = Timeline::default();
+        tl.set_buffer(buffer);
+        // frames arrive in order: a late one holds up the ones behind it
+        let mut latest = 0.0f64;
+        let arrivals: Vec<(f64, u16)> = (0..frames)
+            .map(|k| {
+                latest = latest.max(arrival_of(k));
+                (latest, k)
+            })
+            .collect();
+        let (mut next, mut t, mut hold_start, mut longest, mut total) = (0, 0.0, None::<f64>, 0.0f64, 0.0f64);
+        let end = arrivals.last().unwrap().0;
+        while t < end {
+            while next < arrivals.len() && arrivals[next].0 <= t {
+                tl.on_frame(arrivals[next].1, arrivals[next].0);
+                next += 1;
+            }
+            if let (Some(id), true) = (tl.last_id, t > 8.0) {
+                let t_cur = tl.content_time(id as u16).unwrap();
+                let wanted = t - tl.interval() - tl.playout();
+                if wanted > t_cur + 1e-9 {
+                    let s = *hold_start.get_or_insert(t);
+                    longest = longest.max(t - s);
+                    total += 1.0 / 144.0;
+                } else {
+                    hold_start = None;
+                }
+            }
+            t += 1.0 / 144.0;
+        }
+        (longest, total, tl.playout())
+    }
+
+    #[test]
+    fn a_smoothing_buffer_turns_late_frames_into_no_hold_at_the_cost_of_a_bounded_delay() {
+        // every 25th frame arrives 24 ms late, the others up to 2 ms: like the arrival gaps of a real stream
+        let late = |k: u16| {
+            let jitter = f64::from((u32::from(k) * 7919) % 5) * 0.0005;
+            0.2 + f64::from(k) * I + jitter + if k % 25 == 7 { 0.024 } else { 0.0 }
+        };
+        let (longest_off, total_off, p_off) = holds(false, late, 2400);
+        assert_eq!(p_off, 0.0);
+        assert!(longest_off > 0.012, "without the buffer a late frame is a hold of its own lateness: {longest_off}");
+        let (longest_on, total_on, p_on) = holds(true, late, 2400);
+        assert!(
+            longest_on < 0.004 && total_on < total_off * 0.2,
+            "holds with the buffer: {longest_on} s, {total_on} against {total_off}"
+        );
+        assert!(p_on > 0.015 && p_on <= MAX_PLAYOUT, "the buffer covers the late frames: {p_on}");
+    }
+
+    #[test]
+    fn the_smoothing_buffer_is_zero_on_a_clean_stream_and_never_above_its_limit() {
+        let (_, _, p) = holds(true, |k| 0.2 + f64::from(k) * I + f64::from((u32::from(k) * 31) % 3) * 0.0002, 2400);
+        assert!(p < 0.002, "a clean stream needs no buffer: {p}");
+        // a very late frame now and then: capped
+        let (_, _, p) = holds(true, |k| 0.2 + f64::from(k) * I + if k % 10 == 3 { 0.2 } else { 0.0 }, 2400);
+        assert!(p <= MAX_PLAYOUT + 1e-12, "{p}");
+        // off: always zero, and the setting survives a reset
+        let mut tl = Timeline::default();
+        tl.set_buffer(true);
+        tl.reset();
+        assert!(tl.buffer);
+        tl.set_buffer(false);
+        assert_eq!(tl.playout(), 0.0);
+    }
+
+    #[test]
+    fn the_buffer_changes_slowly() {
+        // from a clean stream to a jittery one: the buffer grows by at most 0.4 ms a frame, never a jump of the content
+        let mut tl = Timeline::default();
+        tl.set_buffer(true);
+        let mut last = 0.0;
+        let mut worst_step = 0.0f64;
+        for k in 0..1200u16 {
+            let jitter = if k > 600 && k % 4 == 0 { 0.02 } else { 0.0 };
+            tl.on_frame(k, 0.2 + f64::from(k) * I + jitter);
+            worst_step = worst_step.max((tl.playout() - last).abs());
+            last = tl.playout();
+        }
+        assert!(worst_step <= PLAYOUT_UP + 1e-12, "{worst_step}");
+        assert!(last > 0.01, "and it got there: {last}");
     }
 
     #[test]

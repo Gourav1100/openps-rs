@@ -24,3 +24,4 @@ if (( keep )) && [[ -d $app/Contents/MacOS/openps-data ]]; then
 fi
 rm -rf "$app"
 echo "removed $app"
+(( keep )) || echo "its data (pairings, settings, logs) was inside the app and is gone; use --keep-data next time to keep a copy"

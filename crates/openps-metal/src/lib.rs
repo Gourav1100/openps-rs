@@ -1,5 +1,6 @@
 pub mod camera;
 pub mod gpu;
+pub mod ladder;
 pub mod look;
 #[cfg(target_os = "macos")]
 pub mod renderer;
@@ -8,7 +9,8 @@ pub mod timeline;
 
 #[cfg(target_os = "macos")]
 pub use renderer::{
-    effective_rate, now, requested_rate, FrameMode, MetalRenderer, RenderSettings, RenderStats, Upscale,
+    effective_rate, effective_rate_with, now, requested_rate, settle_held_rate, FrameMode, MetalRenderer,
+    RenderSettings, RenderStats, Upscale,
 };
 
 /// The refresh rate of the display the window is on (milli-Hz; 0 = not reported yet). Set by the app whenever the window moves,

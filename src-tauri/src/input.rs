@@ -78,11 +78,11 @@ fn with_ps(mut state: ControllerState) -> ControllerState {
 
 impl Output for AppOutput {
     fn pad(&mut self, state: &ControllerState) {
-        self.look.push(openps_metal::now(), state.right_x as f32, state.right_y as f32);
         *LAST_PAD.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
         if crate::pads::controller_active(&self.app) {
-            return; // the physical pad owns the console until Controls is pressed
+            return; // the physical pad owns the console until Controls is pressed (and is what the camera follows: pads.rs records it)
         }
+        self.look.push(openps_metal::now(), state.right_x as f32, state.right_y as f32);
         if let Some(core) = self.app.try_state::<Core>() {
             let _ = core.set_pad(with_ps(state.clone())); // NotConnected between sessions is expected
         }

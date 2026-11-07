@@ -10,6 +10,8 @@ pub enum PadOutput {
     Intensity { haptic: u8, adaptive_trigger: u8 },
     /// kind 11: adaptive trigger effects, one type byte + 10 parameter bytes per trigger.
     AdaptiveTriggers { pad: u8, left_type: u8, right_type: u8, left: [u8; 10], right: [u8; 10] },
+    /// The console asks for the motion origin to be set to the current position (the pad-info message's reset flag).
+    MotionReset,
 }
 
 /// `ec.a(type, params)`: type 5 is re-derived from its 10-bit mask; everything else passes through.
@@ -49,8 +51,14 @@ pub fn parse(kind: u8, data: &[u8]) -> Vec<PadOutput> {
                 out.push(PadOutput::Led { pad: data[o], r: data[o + 1], g: data[o + 2], b: data[o + 3] });
             }
             if l == 25 {
+                if data[12] != 0 {
+                    out.push(PadOutput::MotionReset);
+                }
                 out.push(PadOutput::Intensity { haptic: data[20], adaptive_trigger: data[21] });
             } else if l == 17 {
+                if data[4] != 0 {
+                    out.push(PadOutput::MotionReset);
+                }
                 out.push(PadOutput::Intensity { haptic: data[12], adaptive_trigger: data[13] });
             }
         }
@@ -112,6 +120,25 @@ mod tests {
         let mut d = [0u8; 7];
         d[0] = 4;
         assert!(parse(9, &d).is_empty());
+    }
+
+    #[test]
+    fn the_motion_reset_flag_is_read_from_both_pad_info_layouts() {
+        // chiaki-ng stream_connection_takion_data_pad_info: byte 12 of the 25-byte form, byte 4 of the 17-byte form
+        let mut long = [0u8; 25];
+        assert!(!parse(9, &long).contains(&PadOutput::MotionReset));
+        long[12] = 1;
+        assert!(parse(9, &long).contains(&PadOutput::MotionReset));
+        let mut short = [0u8; 17];
+        assert!(!parse(9, &short).contains(&PadOutput::MotionReset));
+        short[4] = 1;
+        assert!(parse(9, &short).contains(&PadOutput::MotionReset));
+        // the intensity still comes with it
+        short[12] = 3;
+        short[13] = 2;
+        assert!(parse(9, &short).contains(&PadOutput::Intensity { haptic: 3, adaptive_trigger: 2 }));
+        // layouts that carry no such flag never reset
+        assert!(!parse(9, &[0u8; 7]).contains(&PadOutput::MotionReset));
     }
 
     #[test]

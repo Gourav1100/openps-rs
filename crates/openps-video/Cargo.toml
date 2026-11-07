@@ -10,3 +10,4 @@ openps-stream = { path = "../openps-stream" }
 openps-takion = { path = "../openps-takion" }
 openps-core = { path = "../openps-core" }
 objc2 = "0.6"
+log = "0.4"

@@ -78,6 +78,10 @@ impl MediaSink for DecodingMedia {
         self.keyframe.swap(false, Ordering::AcqRel)
     }
 
+    fn pictures_shown(&self) -> Option<u64> {
+        Some(self.counters().decoded)
+    }
+
     fn audio(&self, frames: Vec<OpusFrame>) {
         if let Some(r) = &self.rest {
             r.audio(frames);

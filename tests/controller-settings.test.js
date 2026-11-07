@@ -20,23 +20,24 @@ test("the Controls toolbar and Settings expose mode status, connected pads, and 
 });
 
 test("the Controls buttons label the current input mode accessibly", () => {
+  const use = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
   const elements = {
-    "map-text": { textContent: "" },
     "map-btn": {
       attributes: {},
       setAttribute(name, value) { this.attributes[name] = value; },
       removeAttribute(name) { delete this.attributes[name]; },
+      querySelector: () => use,
     },
   };
   const paint = new Function("$", "S", `${modePainter}; ${mappingPainter}; return paintMapping();`);
 
   paint((id) => elements[id], { input: { mapping: false, notice: "" } });
-  assert.equal(elements["map-text"].textContent, "Controller");
   assert.equal(elements["map-btn"].attributes["aria-pressed"], "false");
   assert.equal(elements["map-btn"].attributes["aria-label"], "Keys & mouse: off");
+  assert.equal(use.attributes.href, "#i-gamepad");
 
   paint((id) => elements[id], { input: { mapping: true, profile: "default", notice: "" } });
-  assert.equal(elements["map-text"].textContent, "Keyboard + mouse");
   assert.equal(elements["map-btn"].attributes["aria-pressed"], "true");
   assert.equal(elements["map-btn"].attributes["aria-label"], "Keys & mouse: on · default");
+  assert.equal(use.attributes.href, "#i-mouse");
 });

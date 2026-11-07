@@ -50,7 +50,7 @@ fn busy() -> RenderSettings {
         display_hz: 144,
         mode: FrameMode::Smooth,
         camera: true,
-        upscale: Upscale::Qhd,
+        upscale: Upscale::X1_33,
         ..Default::default()
     }
 }
@@ -113,13 +113,20 @@ fn a_settings_storm_while_streaming_neither_deadlocks_nor_errors() {
         let mut n = 0u64;
         while !stop2.load(Ordering::Relaxed) {
             r2.set_settings(RenderSettings {
-                upscale: [Upscale::Off, Upscale::Qhd, Upscale::Uhd][(n % 3) as usize],
+                upscale: [Upscale::Off, Upscale::X1_33, Upscale::X2][(n % 3) as usize],
                 display_hz: [30, 60, 75, 120, 144][(n % 5) as usize],
                 mode: if n.is_multiple_of(2) { FrameMode::Smooth } else { FrameMode::ZeroLatency },
                 camera: n.is_multiple_of(3),
                 metalfx: n.is_multiple_of(4),
+                fsr: n.is_multiple_of(3),
+                linear_light: n.is_multiple_of(2),
+                adaptive: n.is_multiple_of(5),
+                jitter_buffer: n.is_multiple_of(3), // the buffer and the display's rate flip live too
+                uncapped: n.is_multiple_of(7),
                 sharpness: (n % 200) as f32 / 100.0,
+                rcas: (n % 150) as f32 / 100.0,
                 saturation: (n % 250) as f32 / 100.0,
+                immersion: n.is_multiple_of(5), // the setting is flipped live while frames render
                 gen_factor: 0.0,
             });
             n += 1;

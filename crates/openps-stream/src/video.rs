@@ -279,6 +279,8 @@ impl VideoAssembler {
     fn deliver(&mut self, id: i32) {
         if let Some(p) = self.remove_frame(id) {
             self.tel_received += p.received() as u32;
+            // source units rebuilt from parity were lost on the network even though the decoder never notices
+            self.tel_missed += p.k.saturating_sub(p.src) as u32;
             if let Some(f) = p.finish() {
                 self.out.push_back(f);
             } // unrecoverable frames are dropped but still advance the cursor
@@ -588,5 +590,24 @@ mod tests {
         let (r, m) = a.poll_telemetry(1.5).unwrap();
         assert!(r >= 2 && m == 0);
         assert_eq!(a.poll_telemetry(1.6), None);
+    }
+
+    #[test]
+    fn units_recovered_by_fec_count_as_missed_in_the_telemetry() {
+        let mut a = VideoAssembler::new(2);
+        let w = encode_frame(&content(777, 9), 4, 2);
+        feed(&mut a, 0, &w, 4, 2, &[1, 3]); // two source units lost, rebuilt from the two parity units
+        assert!(a.pop_frame().is_some(), "FEC hid the loss from the decoder");
+        let (received, missed) = a.poll_telemetry(2.0).unwrap();
+        assert_eq!((received, missed), (4, 2), "but the network really lost two units");
+    }
+
+    #[test]
+    fn a_frame_that_needed_no_fec_and_spare_parity_report_no_loss() {
+        let mut a = VideoAssembler::new(2);
+        let w = encode_frame(&content(777, 9), 4, 2);
+        feed(&mut a, 0, &w, 4, 2, &[4, 5]); // every source unit arrived; the parity was never needed
+        assert!(a.pop_frame().is_some());
+        assert_eq!(a.poll_telemetry(2.0), Some((4, 0)));
     }
 }
