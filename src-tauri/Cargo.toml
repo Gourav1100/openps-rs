@@ -1,6 +1,6 @@
 [package]
 name = "openps-app"
-version = "0.3.0"
+version = "0.4.0"
 description = "OpenPS Rust port (Tauri shell)"
 authors = []
 license = ""
@@ -47,6 +47,7 @@ openps-video = { path = "../crates/openps-video" }
 openps-audio = { path = "../crates/openps-audio" }
 openps-macinput = { path = "../crates/openps-macinput" }
 openps-metal = { path = "../crates/openps-metal" }
+openps-scene = { path = "../crates/openps-scene" }
 openps-demo = { path = "../crates/openps-demo", optional = true }
 
 [dev-dependencies]

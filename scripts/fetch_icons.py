@@ -12,6 +12,7 @@ ICONS = {
     "trash": "trash-2", "expand": "maximize", "volume": "volume-2", "mute": "volume-x", "gamepad": "gamepad-2", "close": "x",
     "check": "check", "alert": "triangle-alert", "user": "user", "copy": "copy", "plus": "plus", "refresh": "refresh-cw",
     "chev-l": "chevron-left", "chev-r": "chevron-right", "trophy": "trophy",
+    "foot": "footprints", "car": "car", "menu": "menu",  # the key mode shown over the stream (on foot, in a vehicle, in a menu)
 }
 root = pathlib.Path(__file__).resolve().parent.parent
 out = root / "assets/icons/lucide"

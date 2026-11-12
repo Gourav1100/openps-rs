@@ -680,8 +680,11 @@ impl Gpu {
             if let Err(e) = self.fx_interpolate(cmd) {
                 self.fx = None; // fall back to our own interpolation rather than fail the frame
                 self.fx_use = false;
+                self.fx_available = false; // the renderer sets `fx_use` every frame: do not retry (and log) on each one
                 eprintln!("MetalFX frame interpolation unavailable: {e}");
             }
+        } else if let Some(fx) = self.fx.as_mut() {
+            fx.frames = 0; // it missed a frame: its history is stale, so start it afresh when it is next used
         }
         Ok(())
     }
@@ -943,7 +946,9 @@ impl Gpu {
         let beta = beta.clamp(0.0, 1.0);
         let mut shown = cur.clone();
         if let (Some(prev), true) = (self.prev.clone(), self.motion_ready()) {
-            let mid = if self.fx_use && (beta - 0.5).abs() <= 0.17 { self.fx_midpoint() } else { None };
+            let mid = if self.fx_use { self.fx_midpoint() } else { None };
+            // MetalFX only makes the midpoint: with it every frame shown is the older frame, the midpoint or the newer frame
+            let beta = if mid.is_some() { (beta * 2.0).round() / 2.0 } else { beta };
             if beta >= 0.999 {
                 shown = cur.clone();
             } else if beta <= 0.001 {

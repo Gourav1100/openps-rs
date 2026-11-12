@@ -1,0 +1,9 @@
+4759 frames in 40 recordings; 1936 have a previous picture (the continuous recordings); zero-shot weight 0.25
+
+head                                        alone + zero-shot     F1  moving  still |    sequences, filter with presses: acc     F1  recall
+logistic regression C=0.1 (shipped)         0.831       0.830  0.815   0.892  0.787 |                                  0.922  0.906  on_foo=0.84 in_veh=0.97 menu=0.95 cutsce=0.75  [38 s]
+picture + change, linear C=0.1              0.822       0.823  0.808   0.881  0.783 |                                  0.914  0.898  on_foo=0.81 in_veh=0.97 menu=0.95 cutsce=0.78  [1399 s]
+picture + change, linear C=0.01             0.827       0.825  0.813   0.882  0.786 |                                  0.911  0.897  on_foo=0.81 in_veh=0.97 menu=0.95 cutsce=0.77  [2002 s]
+shipped + motion terms, degree 2, C=0.1     0.827       0.827  0.811   0.898  0.779 |                                  0.911  0.880  on_foo=0.82 in_veh=0.97 menu=0.95 cutsce=0.63  [137 s]
+shipped + motion terms, degree 2, C=0.01    0.830       0.831  0.816   0.896  0.786 |                                  0.909  0.880  on_foo=0.81 in_veh=0.97 menu=0.95 cutsce=0.64  [150 s]
+PCA 64 + motion, degree 2, C=0.01           0.791       0.797  0.778   0.858  0.755 |                                  0.898  0.804  on_foo=0.82 in_veh=0.96 menu=0.93 cutsce=0.33  [1657 s]

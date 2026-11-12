@@ -500,7 +500,14 @@ fn the_engine_choice_maps_to_the_renderer_switches() {
     let r = o("metalfx");
     assert!(r.metalfx && !r.fsr, "{r:?}");
     let r = o("fsr");
-    assert!(r.metalfx && r.fsr, "FSR upscales; MetalFX still makes the generated midpoints: {r:?}");
+    assert!(r.metalfx && r.fsr, "FSR upscales; MetalFX still makes the generated frames: {r:?}");
+    let i = |interp: &str| video::render_settings(&StreamOptions { interpolator: interp.into(), ..Default::default() });
+    let r = i("builtin");
+    assert!(!r.metalfx && !r.fx_fallback, "{r:?}");
+    let r = i("metalfx");
+    assert!(r.metalfx && !r.fx_fallback, "{r:?}");
+    let r = i("dynamic");
+    assert!(r.metalfx && r.fx_fallback, "{r:?}");
 }
 
 #[test]
@@ -510,42 +517,33 @@ fn every_filter_switch_reaches_the_renderer_as_the_value_that_leaves_the_picture
     let r = video::render_settings(&on);
     assert_eq!((r.sharpness, r.rcas, r.saturation), (0.8, 1.5, 1.3));
     assert!(r.linear_light && r.adaptive);
-    let off = StreamOptions {
-        sharpness_on: false,
-        rcas_on: false,
-        saturation_on: false,
-        linear_light: false,
-        adaptive_fps: false,
-        pacing_buffer: true,
-        uncapped_rate: false,
-        ..on.clone()
-    };
+    let off =
+        StreamOptions { sharpness_on: false, rcas_on: false, saturation_on: false, linear_light: false, ..on.clone() };
     let r = video::render_settings(&off);
     assert!(
-        r.jitter_buffer && !r.uncapped,
-        "the smoothing buffer is on and the display's rate is the limit unless chosen"
+        r.jitter_buffer && r.adaptive && !r.uncapped,
+        "the smoothing buffer and the adaptive frame rate are always on"
     );
-    let both = video::render_settings(&StreamOptions { pacing_buffer: false, uncapped_rate: true, ..off.clone() });
-    assert!(!both.jitter_buffer && both.uncapped, "the two options reach the renderer");
     assert_eq!(r.sharpness, 1.0, "with an upscaler, off is the picture as it draws it");
     assert_eq!((r.rcas, r.saturation), (0.0, 1.0));
-    assert!(!r.linear_light && !r.adaptive);
+    assert!(!r.linear_light);
     // without upscaling the sharpness setting is an unsharp mask around 50 %: off is 50 %
     let r = video::render_settings(&StreamOptions { upscale: "off".into(), ..off });
     assert_eq!(r.sharpness, 0.5);
 }
 
 #[test]
-fn frame_generation_fills_the_display_and_off_shows_frames_as_they_arrive() {
+fn frame_generation_is_the_chosen_multiple_and_off_shows_frames_as_they_arrive() {
     use openps_core::StreamOptions;
-    let on = video::render_settings(&StreamOptions { framegen_on: true, ..Default::default() });
-    assert_eq!((on.gen_factor, on.display_hz), (0.0, video::AUTO_RATE_HZ), "on: ask for the most, the display caps it");
-    let off = video::render_settings(&StreamOptions { framegen_on: false, ..Default::default() });
-    assert_eq!(off.gen_factor, 1.0, "off: the stream's own rate, nothing generated");
-    // no stored rate or old display rate changes what is asked for
+    for (tenths, factor) in [(10u8, 1.0f32), (15, 1.5), (20, 2.0), (25, 2.5), (30, 3.0), (0, 2.0)] {
+        let r = video::render_settings(&StreamOptions { frame_gen: tenths, ..Default::default() });
+        assert_eq!((r.gen_factor, r.display_hz), (factor, video::AUTO_RATE_HZ), "{tenths} tenths");
+        assert!(r.adaptive && r.jitter_buffer, "the adaptive rate caps the multiple and the buffer is always on");
+    }
+    // the old display rate changes nothing
     for display_fps in [0u16, 30, 75, 144, u16::MAX] {
         let r = video::render_settings(&StreamOptions { display_fps, ..Default::default() });
-        assert_eq!((r.gen_factor, r.display_hz), (0.0, video::AUTO_RATE_HZ), "display_fps {display_fps}");
+        assert_eq!((r.gen_factor, r.display_hz), (2.0, video::AUTO_RATE_HZ), "display_fps {display_fps}");
     }
 }
 
@@ -598,6 +596,7 @@ fn stream_options_validation_rejects_the_hostile_json_the_ipc_can_deliver() {
         ("display_fps", serde_json::json!(240)),
         ("frame_mode", serde_json::json!("")),
         ("engine", serde_json::json!("\u{202e}metalfx")),
+        ("interpolator", serde_json::json!("vt")),
         ("volume", serde_json::json!(101)),
         ("sharpness", serde_json::json!(201)),
         ("saturation", serde_json::json!(201)),

@@ -2,9 +2,11 @@
 //! No capture UI here: the overlay and the Tauri front end drive these methods.
 
 use crate::config::{
-    load_defaults, load_layers, load_path, mouse_move_rows, valid_profile_name, Combo, ComboOutput, Config,
+    can_carry_action, load_defaults, load_layers, load_path, mouse_move_rows, valid_profile_name, Advanced, Combo,
+    ComboOutput, Config,
 };
 use crate::keys::{chord_to_str, parse_chord, Chord};
+use crate::scene::{Action, Layer};
 use crate::state::{Axis, Button, Control, Gesture};
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,6 +43,8 @@ pub struct EditorState {
     profile_combos: IndexMap<String, Vec<Value>>,
     /// Permanent ids by profile name, for every profile but the base (see `Config::id_of`).
     ids: BTreeMap<String, String>,
+    /// The advanced mode of every profile, the base one included.
+    advanced: IndexMap<String, Advanced>,
 }
 
 pub struct Editor {
@@ -72,6 +76,30 @@ fn combo_value(c: &Combo) -> Value {
 /// Serialise a table to TOML text (scalars, lists, nested tables, arrays of tables).
 pub fn dump_toml(data: &Table) -> String {
     toml::to_string(data).expect("serialisable table")
+}
+
+fn advanced_value(a: &Advanced) -> Value {
+    let mut t = Table::new();
+    t.insert("enabled".into(), Value::Boolean(a.enabled));
+    for layer in Layer::ALL {
+        let keys: Table = a
+            .layer(layer)
+            .iter()
+            .filter(|(_, chords)| !chords.is_empty())
+            .map(|(c, chords)| (c.clone(), strs(chords)))
+            .collect();
+        if !keys.is_empty() {
+            t.insert(layer.name().into(), Value::Table(keys));
+        }
+    }
+    if !a.labels.is_empty() {
+        let labels: Table = a.labels.iter().map(|(c, n)| (c.clone(), Value::String(n.clone()))).collect();
+        t.insert("labels".into(), Value::Table(labels));
+    }
+    if !a.disabled_layers.is_empty() {
+        t.insert("disabled_layers".into(), strs(&a.disabled_layers));
+    }
+    Value::Table(t)
 }
 
 impl Editor {
@@ -119,6 +147,14 @@ impl Editor {
                 raw,
                 profile_combos,
                 ids: cfg.profiles.keys().filter_map(|n| cfg.id_of(n).map(|i| (n.clone(), i))).collect(),
+                advanced: cfg
+                    .profile_names()
+                    .into_iter()
+                    .map(|n| {
+                        let a = cfg.advanced_of(&n).cloned().unwrap_or_default();
+                        (n, a)
+                    })
+                    .collect(),
             },
         })
     }
@@ -280,6 +316,64 @@ impl Editor {
         self.assign(control, items);
     }
 
+    // ---- advanced mode (on the current profile) --------------------------------------------------------
+    pub fn advanced(&self) -> &Advanced {
+        &self.s.advanced[&self.s.current]
+    }
+
+    fn advanced_mut(&mut self) -> &mut Advanced {
+        let cur = self.s.current.clone();
+        self.s.advanced.entry(cur).or_default()
+    }
+
+    /// Switch advanced mode on or off. The first time it is switched on the three layers start as copies of the primary keys, so nothing
+    /// stops working; what was in primary and secondary stays in the file for when it is switched off.
+    pub fn set_advanced(&mut self, on: bool) {
+        let primary: BTreeMap<String, Vec<String>> = self
+            .bindings()
+            .iter()
+            .filter_map(|(c, chords)| chords.first().map(|f| (c.clone(), vec![f.clone()])))
+            .collect();
+        let a = self.advanced_mut();
+        a.enabled = on;
+        if on && Layer::ALL.iter().all(|l| a.layer(*l).is_empty()) {
+            for layer in Layer::ALL {
+                *a.layer_mut(layer) = primary.clone();
+            }
+        }
+    }
+
+    /// Turn a layer of the current profile on or off. `false` when it is the last one in use.
+    pub fn set_layer_enabled(&mut self, layer: Layer, on: bool) -> bool {
+        self.advanced_mut().set_layer_enabled(layer, on)
+    }
+
+    /// The key of a control in a layer ("-" when there is none).
+    pub fn layer_slot(&self, control: Control, layer: Layer) -> String {
+        self.advanced().layer(layer).get(control.name()).and_then(|c| c.first().cloned()).unwrap_or_else(|| "-".into())
+    }
+
+    pub fn set_layer_slot(&mut self, control: Control, layer: Layer, chord: &Chord) {
+        self.advanced_mut().layer_mut(layer).insert(control.name().into(), vec![chord_to_str(chord)]);
+    }
+
+    pub fn clear_layer_slot(&mut self, control: Control, layer: Layer) {
+        self.advanced_mut().layer_mut(layer).remove(control.name());
+    }
+
+    /// Put an action label on a control, or take it off (`None`). A control carries at most one; an action can be on many controls.
+    pub fn set_label(&mut self, control: Control, action: Option<Action>) -> Result<(), String> {
+        if !can_carry_action(control) {
+            return Err(format!("{} cannot carry an action (only buttons and the triggers can)", control.name()));
+        }
+        let labels = &mut self.advanced_mut().labels;
+        match action {
+            Some(a) => labels.insert(control.name().into(), a.name().into()),
+            None => labels.remove(control.name()),
+        };
+        Ok(())
+    }
+
     // ---- profiles ----------------------------------------------------------------------------------
     /// Err unless `name` is a usable, unused profile name.
     pub fn check_name(&self, name: &str, ignore: Option<&str>) -> Result<(), String> {
@@ -308,6 +402,8 @@ impl Editor {
         let src = source.unwrap_or(&self.s.default_name);
         let table = self.s.profiles.get(src).ok_or_else(|| format!("no profile named {src:?}"))?.clone();
         self.s.profiles.insert(name.to_string(), table);
+        let adv = self.s.advanced.get(src).cloned().unwrap_or_default();
+        self.s.advanced.insert(name.to_string(), adv);
         let id = self.fresh_id();
         self.s.ids.insert(name.to_string(), id);
         Ok(())
@@ -348,6 +444,7 @@ impl Editor {
             self.s.deleted.insert(name.to_string());
         } // or it would come back
         self.s.profiles.shift_remove(name);
+        self.s.advanced.shift_remove(name);
         self.s.profile_combos.shift_remove(name);
         self.s.ids.remove(name);
         if self.s.current == name {
@@ -378,6 +475,10 @@ impl Editor {
         self.s.profiles = std::mem::take(&mut self.s.profiles)
             .into_iter()
             .map(|(n, t)| (if n == old { new.to_string() } else { n }, t))
+            .collect();
+        self.s.advanced = std::mem::take(&mut self.s.advanced)
+            .into_iter()
+            .map(|(n, a)| (if n == old { new.to_string() } else { n }, a))
             .collect();
         if let Some(c) = self.s.profile_combos.shift_remove(old) {
             self.s.profile_combos.insert(new.to_string(), c);
@@ -419,6 +520,7 @@ impl Editor {
             self.s.profiles.insert(name.clone(), t);
         }
         self.s.profile_combos.shift_remove(&name);
+        self.s.advanced.insert(name, Advanced::default());
         Ok(())
     }
 
@@ -458,7 +560,7 @@ impl Editor {
         let mut data: Table = s
             .raw
             .iter()
-            .filter(|(k, _)| !["bindings", "combos", "profiles", "profile_ids"].contains(&k.as_str()))
+            .filter(|(k, _)| !["bindings", "combos", "profiles", "profile_ids", "advanced"].contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         data.insert("toggle".into(), Value::String(s.toggle.clone()));
@@ -495,6 +597,9 @@ impl Editor {
         if !s.combos.is_empty() {
             data.insert("combos".into(), Value::Array(s.combos.clone()));
         }
+        if let Some(a) = s.advanced.get(&s.default_name).filter(|a| !a.is_empty()) {
+            data.insert("advanced".into(), advanced_value(a));
+        }
         let mut profiles = Table::new();
         for (name, table) in &s.profiles {
             if *name == s.default_name {
@@ -517,6 +622,10 @@ impl Editor {
             let mut prof =
                 s.raw.get("profiles").and_then(|p| p.get(name)).and_then(Value::as_table).cloned().unwrap_or_default();
             prof.insert("bindings".into(), Value::Table(keep));
+            prof.remove("advanced");
+            if let Some(a) = s.advanced.get(name).filter(|a| !a.is_empty()) {
+                prof.insert("advanced".into(), advanced_value(a));
+            }
             match s.profile_combos.get(name) {
                 Some(c) if !c.is_empty() => {
                     prof.insert("combos".into(), Value::Array(c.clone()));

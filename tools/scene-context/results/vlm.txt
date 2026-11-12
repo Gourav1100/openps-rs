@@ -1,0 +1,22 @@
+Vision-language models against MobileCLIP-S1 (experiments/vlm.py, vlm_stack.py, vlm_replay.py; MLX, 4-bit, Mac Mini M4)
+
+Question to the model: four-way multiple choice (on foot / in vehicle / menu / cutscene); the answer is the next-token probability of A-D.
+Frames are the stored 480x270 thumbnails.
+
+240 frames (60 per state, all recordings), each recording read by a probe/calibration that never saw it:
+                                   zero-shot   recalibrated   per frame   GPU memory
+  MobileCLIP-S1 probe (shipped)    0.654 (probe)   0.696         ~5 ms       0.1 GB
+  SmolVLM-500M                     0.338           0.421         1665 ms     1.1 GB
+  FastVLM-0.5B                     0.654           0.738          541 ms     1.7 GB
+  Qwen3-VL-2B                      0.633           0.775          521 ms     2.2 GB
+  Qwen3-VL-4B                      0.579           0.767         1007 ms     3.6 GB
+  Gemma-3n-E2B                     did not produce an answer token (stopped after 7 minutes, 5.3 GB)
+  Stacking either VLM on the probe: no gain on 240 frames (0.72-0.76).
+
+Replay of the full filter with simulated presses, 1798 frames in 5 recordings (scene right / macro-F1):
+                                   frames alone   filter + keys
+  MobileCLIP-S1 probe (shipped)    0.834 / 0.732   0.855 / 0.750
+  Qwen3-VL-2B recalibrated         0.804 / 0.650   0.854 / 0.745
+  Qwen3-VL-2B + MobileCLIP-S1      0.856 / 0.761   0.876 / 0.817
+  FastVLM-0.5B recalibrated        0.735 / 0.561   0.777 / 0.591
+  FastVLM-0.5B + MobileCLIP-S1     0.835 / 0.705   0.859 / 0.717

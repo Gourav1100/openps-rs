@@ -1,9 +1,10 @@
 //! Everything the overlay shows, as plain serialisable data (port of overlay.build_state).
 //! The Tauri front end renders it as HTML; Con2PC's pixel layout / hit-testing are not ported.
 
-use crate::config::{mouse_move_rows, Config};
+use crate::config::{can_carry_action, mouse_move_rows, Config};
 use crate::keys::{chord_to_str, parse_chord, Key};
-use crate::state::{Axis, Button, Gesture};
+use crate::scene::{Action, Layer, SceneStatus};
+use crate::state::{parse_control, Axis, Button, Gesture};
 use serde::Serialize;
 
 pub const SENS_MIN: f64 = 0.01;
@@ -18,6 +19,20 @@ pub struct Row {
     pub control: String,
     pub primary: String,
     pub secondary: String,
+    /// The keys in each layer of an advanced profile ("-" for none; all "-" in a plain profile).
+    pub on_foot: String,
+    pub in_vehicle: String,
+    pub in_menu: String,
+    /// The action label this control carries (`key_enter_or_exit_vehicle`, ...).
+    pub label: Option<String>,
+    /// Buttons and the triggers can carry an action; sticks and touchpad gestures cannot.
+    pub can_label: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ActionOption {
+    pub name: &'static str,
+    pub title: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -37,6 +52,13 @@ pub struct Capturing {
 pub struct Renaming {
     pub name: String,
     pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LayerFlags {
+    pub on_foot: bool,
+    pub in_vehicle: bool,
+    pub in_menu: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -59,6 +81,14 @@ pub struct OverlayState {
     pub click_modes: (&'static str, &'static str),
     pub opacity: f64,
     pub rows: Vec<Row>,
+    /// The profile is in advanced mode: the keys come in three layers and controls can carry action labels.
+    pub advanced: bool,
+    /// Which layers the profile uses (a layer that is off is skipped by the scene detector and the key map).
+    pub layers: LayerFlags,
+    /// The action labels a control can carry.
+    pub actions: Vec<ActionOption>,
+    /// The scene detector, whose scene picks the layer.
+    pub scene: SceneStatus,
     pub mouse: Vec<(String, String)>,
     pub hotkeys: Vec<(String, String)>,
     pub anchor: Option<Bounds>,
@@ -102,8 +132,10 @@ pub fn build_state(
     notice: String,
     renaming: Option<Renaming>,
     click_modes: (&'static str, &'static str),
+    scene: SceneStatus,
 ) -> OverlayState {
     let bindings = cfg.profile_bindings(profile);
+    let adv = cfg.advanced_of(profile).cloned().unwrap_or_default();
     let controls = Button::ALL
         .iter()
         .map(|b| b.name())
@@ -112,10 +144,21 @@ pub fn build_state(
     let rows = controls
         .map(|c| {
             let keys = display(bindings.get(c).map(Vec::as_slice).unwrap_or(&[]));
+            let layer = |l: Layer| {
+                display(adv.layer(l).get(c).map(Vec::as_slice).unwrap_or(&[]))
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "-".into())
+            };
             Row {
                 control: c.into(),
                 primary: keys.first().cloned().unwrap_or_else(|| "-".into()),
                 secondary: if keys.len() > 1 { keys[1..].join(", ") } else { "-".into() },
+                on_foot: layer(Layer::OnFoot),
+                in_vehicle: layer(Layer::InVehicle),
+                in_menu: layer(Layer::InMenu),
+                label: adv.label_of(c).map(|a| a.name().to_string()),
+                can_label: parse_control(c).is_ok_and(can_carry_action),
             }
         })
         .collect();
@@ -141,6 +184,14 @@ pub fn build_state(
         click_modes,
         opacity: cfg.overlay_opacity,
         rows,
+        advanced: adv.enabled,
+        layers: LayerFlags {
+            on_foot: adv.layer_enabled(Layer::OnFoot),
+            in_vehicle: adv.layer_enabled(Layer::InVehicle),
+            in_menu: adv.layer_enabled(Layer::InMenu),
+        },
+        actions: Action::ALL.iter().map(|a| ActionOption { name: a.name(), title: a.title() }).collect(),
+        scene,
         mouse: mouse_move_rows(&cfg.mouse.look, cfg.mouse.invert_y),
         hotkeys: vec![
             (cfg.overlay_key.clone(), "overlay".into()),

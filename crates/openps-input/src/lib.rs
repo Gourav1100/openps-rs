@@ -6,6 +6,7 @@ pub mod engine;
 pub mod keys;
 pub mod mapping;
 pub mod overlay;
+pub mod scene;
 pub mod state;
 pub mod textinput;
 pub mod trace;

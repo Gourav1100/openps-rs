@@ -4,6 +4,7 @@ use crate::cursor::Cursor;
 use crate::hub::{InputHub, Msg};
 use crate::platform::{HubPlatform, Output};
 use openps_input::engine::{Engine, Hotkey, UiEvent};
+use openps_input::scene::SceneLink;
 use openps_input::Config;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
@@ -32,6 +33,17 @@ impl InputRunner {
         cursor: Box<dyn Cursor>,
         out: Box<dyn Output>,
     ) -> Result<Self, String> {
+        Self::start_with_scene(hub, cfg, cursor, out, None)
+    }
+
+    /// Like `start`, with the link the scene detector shares with the engine (the layer in, the actions out).
+    pub fn start_with_scene(
+        hub: Arc<InputHub>,
+        cfg: RunnerConfig,
+        cursor: Box<dyn Cursor>,
+        out: Box<dyn Output>,
+        scene: Option<Arc<SceneLink>>,
+    ) -> Result<Self, String> {
         let (tx, rx) = channel::<Msg>();
         let (ready_tx, ready_rx) = channel::<Result<(), String>>();
         hub.attach(tx.clone());
@@ -50,6 +62,9 @@ impl InputRunner {
                 };
                 if let Some(p) = cfg.config_path {
                     engine = engine.with_config_path(p);
+                }
+                if let Some(link) = scene {
+                    engine = engine.with_scene(link);
                 }
                 let t0 = Instant::now();
                 engine.start(0.0);

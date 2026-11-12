@@ -1,0 +1,52 @@
+3297 frames: {'on_foot': 1262, 'in_vehicle': 1373, 'menu': 132, 'cutscene': 530}
+sequence frames 1798: {'on_foot': 574, 'in_vehicle': 1059, 'menu': 106, 'cutscene': 59}
+
+=== mode=session: frame classifier alone on all 3297 frames
+  4-state acc 0.732  macro-F1 0.699  recall on_foo=0.59 in_veh=0.95 menu=0.73 cutsce=0.51
+  confusion (rows true, cols predicted) ['on_foot', 'in_vehicle', 'menu', 'cutscene']
+[[ 740  376    8  138]
+ [  33 1306    1   33]
+ [   3    8   97   24]
+ [ 200   41   20  269]]
+
+  sequences, unrelated-action rate x1.0  (true context changes per 100 frames: 8.3)
+            ctx acc  ctx F1  view acc  switches/100  delay(frames)   recall
+  frame       0.834   0.732     0.872          20.1           0.43   on_foo=0.66 in_veh=0.94 menu=0.82 cutsce=0.64
+  smooth      0.830   0.724     0.882           8.4           1.33   on_foo=0.64 in_veh=0.96 menu=0.70 cutsce=0.53
+  keys        0.845   0.737     0.885          14.2           0.56   on_foo=0.70 in_veh=0.96 menu=0.75 cutsce=0.41
+
+  sequences, unrelated-action rate x3.0  (true context changes per 100 frames: 8.3)
+            ctx acc  ctx F1  view acc  switches/100  delay(frames)   recall
+  frame       0.834   0.732     0.872          20.1           0.43   on_foo=0.66 in_veh=0.94 menu=0.82 cutsce=0.64
+  smooth      0.830   0.724     0.882           8.4           1.33   on_foo=0.64 in_veh=0.96 menu=0.70 cutsce=0.53
+  keys        0.828   0.754     0.877          19.6           0.48   on_foo=0.67 in_veh=0.94 menu=0.76 cutsce=0.55
+
+=== mode=block: frame classifier alone on all 3297 frames
+  4-state acc 0.864  macro-F1 0.842  recall on_foo=0.84 in_veh=0.92 menu=0.87 cutsce=0.78
+  confusion (rows true, cols predicted) ['on_foot', 'in_vehicle', 'menu', 'cutscene']
+[[1056   72   11  123]
+ [  69 1264    1   39]
+ [   6    0  115   11]
+ [  81   21   13  415]]
+
+  sequences, unrelated-action rate x1.0  (true context changes per 100 frames: 8.3)
+            ctx acc  ctx F1  view acc  switches/100  delay(frames)   recall
+  frame       0.858   0.765     0.952          20.0           0.47   on_foo=0.76 in_veh=0.91 menu=0.92 cutsce=0.73
+  smooth      0.883   0.790     0.965          12.0           0.69   on_foo=0.81 in_veh=0.93 menu=0.91 cutsce=0.71
+  keys        0.897   0.803     0.961          14.0           0.44   on_foo=0.84 in_veh=0.94 menu=0.89 cutsce=0.67
+
+  sequences, unrelated-action rate x3.0  (true context changes per 100 frames: 8.3)
+            ctx acc  ctx F1  view acc  switches/100  delay(frames)   recall
+  frame       0.858   0.765     0.952          20.0           0.47   on_foo=0.76 in_veh=0.91 menu=0.92 cutsce=0.73
+  smooth      0.883   0.790     0.965          12.0           0.69   on_foo=0.81 in_veh=0.93 menu=0.91 cutsce=0.71
+  keys        0.882   0.790     0.952          16.3           0.41   on_foo=0.82 in_veh=0.93 menu=0.87 cutsce=0.67
+
+SENSITIVITY (keys): ctx acc / ctx F1
+  session alpha=0.3  frame 0.834/0.732  smooth 0.819/0.706  base=0.0005: 0.836/0.711  base=0.003: 0.837/0.713  base=0.02: 0.836/0.721
+  session alpha=0.5  frame 0.834/0.732  smooth 0.825/0.717  base=0.0005: 0.843/0.727  base=0.003: 0.842/0.728  base=0.02: 0.842/0.740
+  session alpha=0.7  frame 0.834/0.732  smooth 0.830/0.724  base=0.0005: 0.846/0.733  base=0.003: 0.847/0.735  base=0.02: 0.847/0.750
+  session alpha=1.0  frame 0.834/0.732  smooth 0.836/0.728  base=0.0005: 0.848/0.740  base=0.003: 0.849/0.743  base=0.02: 0.849/0.754
+  block   alpha=0.3  frame 0.858/0.765  smooth 0.877/0.774  base=0.0005: 0.896/0.815  base=0.003: 0.896/0.817  base=0.02: 0.894/0.815
+  block   alpha=0.5  frame 0.858/0.765  smooth 0.882/0.783  base=0.0005: 0.898/0.810  base=0.003: 0.896/0.810  base=0.02: 0.892/0.803
+  block   alpha=0.7  frame 0.858/0.765  smooth 0.883/0.790  base=0.0005: 0.895/0.802  base=0.003: 0.896/0.803  base=0.02: 0.890/0.796
+  block   alpha=1.0  frame 0.858/0.765  smooth 0.878/0.787  base=0.0005: 0.895/0.802  base=0.003: 0.893/0.800  base=0.02: 0.886/0.795

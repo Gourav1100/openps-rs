@@ -4,9 +4,11 @@ const path = require("node:path");
 const test = require("node:test");
 
 const root = path.join(__dirname, "..");
-const html = fs.readFileSync(path.join(root, "dist", "index.html"), "utf8");
+// an editor may reflow the page and the styles: compare them without line breaks and indentation
+const squash = (s) => s.replace(/\s+/g, " ").replace(/> </g, "><");
+const html = squash(fs.readFileSync(path.join(root, "dist", "index.html"), "utf8"));
 const app = fs.readFileSync(path.join(root, "dist", "app.js"), "utf8");
-const css = fs.readFileSync(path.join(root, "dist", "style.css"), "utf8");
+const css = squash(fs.readFileSync(path.join(root, "dist", "style.css"), "utf8"));
 
 const fn = (name) => {
   const m = app.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
@@ -14,34 +16,58 @@ const fn = (name) => {
   return m[0];
 };
 
-test("every picture filter and frame generation have their own switch; frame generation has no rate slider", () => {
-  for (const id of ["linear", "sharp", "rcas", "sat", "fg", "adapt"]) {
+test("every picture filter has its own switch; frame generation is a multiple of the stream's rate, with no rate slider", () => {
+  for (const id of ["linear", "sharp", "rcas", "sat"]) {
     assert.match(html, new RegExp(`id="${id}-switch"[^>]*role="switch"`), `${id} has a switch`);
     assert.match(app, new RegExp(`setSwitch\\("${id}-switch"`), `${id} switch is wired`);
   }
   for (const id of ["sharp", "rcas", "sat"]) {
     assert.match(html, new RegExp(`id="${id}-range" type="range" min="0" max="200" step="5"`));
   }
-  // the frame rate is automatic: the display's, stepped down by the adaptive frame rate
+  // the target is a multiple; the display's rate caps it and the adaptive frame rate lowers it
   assert.doesNotMatch(html, /fps-range|fps-out|fps-reset/, "no frame rate slider on the page");
   assert.doesNotMatch(app, /target_fps|fps-range/, "no target rate in the page's code");
-  assert.match(app, /framegen_on/);
-  assert.match(app, /adaptive_fps/);
+  assert.match(html, /data-setting="frame_gen"/);
+  assert.match(app, /\[\[10, "Off"\], \[15, "1\.5×"[^\]]*\], \[20, "2×"[^\]]*\], \[25, "2\.5×"[^\]]*\], \[30, "3×"[^\]]*\]\]/);
+  assert.match(app, /save\(\{ frame_gen: v \}\)/);
 });
 
-test("the settings carry one flag per filter, with the old multiples gone from the page", () => {
+test("frame generation sits below upscaling and above the engine; the adaptive frame rate, smoothing buffer and rate above the display are no options", () => {
+  const at = (needle) => {
+    const i = html.indexOf(needle);
+    assert.ok(i >= 0, `${needle} is on the page`);
+    return i;
+  };
+  assert.ok(at('data-setting="upscale"') < at('data-setting="frame_gen"'), "frame generation is below upscaling");
+  assert.ok(at('data-setting="frame_gen"') < at('data-setting="engine"'), "frame generation is above the engine");
+  for (const id of ["fg", "adapt", "buffer", "uncap"]) {
+    assert.doesNotMatch(html, new RegExp(`id="${id}-switch"`), `${id} has no switch`);
+  }
+  for (const key of ["framegen_on", "adaptive_fps", "pacing_buffer", "uncapped_rate"]) {
+    assert.doesNotMatch(app, new RegExp(key), `${key} is no setting any more`);
+  }
+});
+
+test("the settings carry one flag per filter, and the old on/off frame generation switch is gone from the page", () => {
   for (const key of ["linear_light", "sharpness_on", "rcas_on", "saturation_on"]) {
     assert.match(app, new RegExp(`save\\(\\{ ${key}: on \\}\\)`), key);
   }
-  assert.doesNotMatch(html, /data-setting="frame_gen"/, "the 1.5x to 3x multiples are gone");
   assert.doesNotMatch(app, /FACTORS/);
 });
+
 
 test("the engine choice is MetalFX or FSR and nothing of VideoToolbox's processors is left", () => {
   assert.match(app, /\[\["metalfx", "MetalFX"\], \["fsr", "FSR"\]\]/);
   for (const [name, text] of [["index.html", html], ["app.js", app], ["style.css", css]]) {
     assert.doesNotMatch(text, /videotoolbox|VideoToolbox|vt_support|vt_sr|vt_fi/i, name);
   }
+});
+
+test("the frame interpolator is Built-in, MetalFX or Dynamic, below the frame mode", () => {
+  assert.ok(html.indexOf('data-setting="frame_mode"') < html.indexOf('data-setting="interpolator"'), "below the frame mode");
+  assert.match(html, /id="interp-hint"/);
+  assert.match(app, /\[\["builtin", "Built-in"\], \["metalfx", "MetalFX"\], \["dynamic", "Dynamic"\]\]/);
+  assert.match(app, /save\(\{ interpolator: v \}\)/);
 });
 
 test("the FSR engine says what it is and why FSR 3 and 4 are not offered", () => {
@@ -136,14 +162,9 @@ test("the slider readout is in percent and Reset puts the default back", () => {
   assert.equal(els.o.textContent, "100 %");
 });
 
-test("the smoothing buffer and running above the display's refresh rate have switches, and the Debug bar says what they do", () => {
-  for (const [id, key] of [["buffer", "pacing_buffer"], ["uncap", "uncapped_rate"]]) {
-    assert.match(html, new RegExp(`id="${id}-switch"[^>]*role="switch"`), `${id} has a switch`);
-    assert.match(app, new RegExp(`setSwitch\\("${id}-switch"[^;]*${key}`), `${id} switch saves ${key}`);
-  }
-  assert.match(html, /20 to 30 ms gaps/, "the hint names the problem it solves");
+test("the smoothing buffer is always on and the Debug bar says what it does", () => {
   assert.match(app, /"Smoothing buffer"/);
-  assert.match(app, /"Above the display's rate"/);
-  // with the option on, a 60 Hz display no longer reads as 'nothing is generated'
-  assert.match(app, /const gen = fgOn && gpuOk && \(uncap \|\| /);
+  assert.doesNotMatch(app, /"Above the display's rate"/, "the option to run above the refresh rate is gone");
+  // frames are generated whenever a multiple is chosen and the display shows more than the stream's rate
+  assert.match(app, /const gen = fg !== 10 && gpuOk && eff\.hz > nativeHz \* 1\.01/);
 });

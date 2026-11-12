@@ -1,0 +1,43 @@
+What was tried to make the scene reader better (scene.py eval, views.py, jepa.py, bars.py, vlm.py; 3,297 labeled frames, 10 recordings).
+Every number is for recordings the head had not seen (leave one recording out), zero-shot sentences mixed in as noted.
+"frame" = one picture alone; "filter+keys" = with the press-gated filter and simulated presses (experiments/fuse.py), on the 5 sequence recordings.
+
+                                                                    frame acc  F1     view   filter+keys acc  F1
+first version: middle square, MobileCLIP-S1, zero-shot weight 0.5    0.732    0.699  0.872   0.855         0.751
+ ... zero-shot weight 0 / 0.25                                       0.702/0.712      0.872   0.733/0.820   (0.5 was right for it)
+whole frame instead of the middle square                              0.746    0.722  0.803   0.854         0.790
++ DINOv2-B on the whole frame  [SHIPPED, C=0.1, zero-shot 0.25]       0.809    0.771  0.868   0.904         0.844
+ ... C=0.5 / 0.03                                                    0.799/0.812             0.905/0.906
+ ... MLP head instead of logistic regression                         0.731    0.686  0.861   0.866         0.753
+ ... + the middle square                                              0.804    0.779  0.878   0.895         0.838
+ ... + three HUD corners (minimap, two right) + middle square         0.828    0.807  0.865   0.900         0.855
+ ... + SigLIP 2                                                      0.756    0.727  0.887   0.876         0.767 (zero-shot 0.5)
+ ... + V-JEPA 2 ViT-L                                                0.748    0.717  0.855   0.866         0.753 (zero-shot 0.5)
+ ... + letterbox-band brightness features                            +0.002                    +0.002
+Zero-shot at 0.5 held back every stronger head; 0.25 (or 0 for frames alone) is better for them.
+
+Why not the larger designs: the HUD corners are 144 x 135 pixels in the stored 480 x 270 thumbnails, blown up to 256, while a live frame gives
+576 x 540 pixels: a different picture to the one the head learns from, for no gain in the filtered result. V-JEPA 2 / I-JEPA / VLMs: see
+backbones.txt and vlm.txt. Temporal features were not tried: the stored frames are 0.5 to 6 s apart depending on the recording.
+
+Per recording, 4-state frame accuracy, first version -> shipped
+  video-1794137021 0.922 -> 0.919     video-1794138431 0.788 -> 0.858     video-1794140032 0.959 -> 0.858     video-1794142097 0.794 -> 0.836
+  gameplay_gta_v 0.770 -> 0.821       gameplay_watch_dog 0.616 -> 0.724   cutscenes_gta_v 0.485 -> 0.573      first_person_driving 0.976 -> 0.980
+  first_person_walking 0.093 -> 0.713 third_person_walking 0.936 -> 0.916                       all 0.732 -> 0.810
+
+Rust replay (crates/openps-scene/tests/replay.rs, shipped model's out-of-recording readings, simulated presses):
+  scene right: old filter 90.9 %, press-gated filter 91.7 % (was 86.0 % and 87.4 % with the first version's readings)
+  the filter's vehicle parameters were swept again (replay.rs, ignored test): the best cell is 92.4 % against 91.7 % for the defaults, within
+  the noise of five recordings, and trades staying on foot beside a vehicle for leaving a vehicle sooner; the defaults stay.
+
+Live frames against training thumbnails (examples/read.rs on 1080p frames and their 480 px JPEGs, two recordings): cosine of the embeddings
+0.97 to 0.99 (whole) and 0.96 to 0.99 (DINOv2-B), the same scene every time, so frames are not scaled down first.
+
+Cost: both models through Vision/Core ML, 28 ms per picture in the test (file read included), one picture every 0.5 s while detection is on.
+Core ML alone: MobileCLIP-S1 about 5 ms, DINOv2-B about 19 ms (experiments/verify_model.py checks the export: cosines to PyTorch 0.970 to 0.9999).
+
+Size: the DINOv2-B package is 164 MB (16-bit weights). 8-bit weights make it 82 MB with the same speed (17 ms) and embeddings within cosine
+0.9985 of the 16-bit ones, but need macOS 14 and the app supports 13 (scripts/install.sh), so it ships in 16 bits.
+
+The scripts behind these tables are in experiments/ (frozen to the first ten recordings and the caches they made); scene.py eval is the
+maintained evaluation of the shipped design, and picks up new recordings by itself.

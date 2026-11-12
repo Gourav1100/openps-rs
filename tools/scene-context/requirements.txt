@@ -1,0 +1,13 @@
+# Everything `scene.sh` needs (it creates .venv from this file). Python 3.12.
+# coremltools does not work with numpy 2 or scikit-learn above 1.5 yet, so those are pinned.
+numpy<2
+scikit-learn<1.6
+scipy<1.14
+pillow
+# the Core ML conversion of MobileCLIP-S1 (open-clip-torch, timm) and DINOv2-B (transformers); only used when the models are converted
+torch
+torchvision
+timm
+open-clip-torch
+coremltools
+transformers

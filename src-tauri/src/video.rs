@@ -93,9 +93,13 @@ enum Backend {
     System(Arc<Renderer>),
 }
 
-struct Output(Backend);
+struct Output(Backend, Option<Arc<openps_scene::service::SceneService>>);
 impl PictureSink for Output {
     fn picture(&self, picture: Frame) {
+        if let Some(scene) = &self.1 {
+            // the scene detector keeps one picture in a while, and only while it is switched on
+            unsafe { scene.offer(picture.as_ptr()) };
+        }
         match &self.0 {
             Backend::Metal(m) => m.submit(picture),
             Backend::System(r) => {
@@ -110,30 +114,31 @@ impl PictureSink for Output {
     }
 }
 
-/// The highest rate frame generation asks for when it is on: the display's own refresh rate caps it (and the adaptive frame rate lowers it
-/// in steps of 5 fps when the Mac cannot keep it up), so there is no rate to choose.
+/// The highest rate asked of the renderer when the generation multiple is not used: the display's own refresh rate caps it.
 pub const AUTO_RATE_HZ: u16 = 240;
 
 /// The render settings a set of stream options asks for. A switched-off filter becomes the value that leaves the picture as it was:
 /// sharpness blend 100 % with an upscaler (the picture as it draws it) or 50 % without (no unsharp mask), adaptive sharpening 0,
-/// saturation 100 %.
+/// saturation 100 %. Frame generation is the chosen multiple of the stream's rate (1.0 when off), the target that the display's refresh
+/// rate caps and the adaptive frame rate lowers; the adaptive frame rate and the smoothing buffer are always on.
 pub fn render_settings(o: &StreamOptions) -> RenderSettings {
     let upscale = Upscale::from_factor(o.upscale_factor());
     let plain_sharpness = if upscale == Upscale::Off { 0.5 } else { 1.0 };
+    let tenths = if o.frame_gen == 0 { 20 } else { o.frame_gen.clamp(10, 30) };
     RenderSettings {
         upscale,
-        // on: fill the display (the renderer never goes above its refresh rate); off: frames as they arrive (the stream's own rate)
         display_hz: AUTO_RATE_HZ,
-        gen_factor: if o.framegen_on { 0.0 } else { 1.0 },
+        gen_factor: f32::from(tenths) / 10.0,
         mode: if o.frame_mode == "smooth" { FrameMode::Smooth } else { FrameMode::ZeroLatency },
         camera: o.camera_comp,
-        // the engine upscales (MetalFX's scaler or FSR); MetalFX makes the midpoints at about 2x with either, our own interpolator the rest
-        metalfx: true,
+        // the engine upscales (MetalFX's scaler or FSR); the interpolator setting decides who makes the generated frames
+        metalfx: o.interpolator != "builtin",
+        fx_fallback: o.interpolator == "dynamic",
         fsr: o.engine == "fsr",
         linear_light: o.linear_light,
-        adaptive: o.adaptive_fps,
-        jitter_buffer: o.pacing_buffer,
-        uncapped: o.uncapped_rate,
+        adaptive: true,
+        jitter_buffer: true,
+        uncapped: false,
         sharpness: if o.sharpness_on { f32::from(o.sharpness.min(200)) / 100.0 } else { plain_sharpness },
         rcas: if o.rcas_on { f32::from(o.rcas.min(200)) / 100.0 } else { 0.0 },
         saturation: if o.saturation_on { f32::from(o.saturation.min(200)) / 100.0 } else { 1.0 },
@@ -152,7 +157,12 @@ pub struct Video {
 
 impl Video {
     /// Create the renderer and its view inside `window`. Must run on the main thread (Tauri's `setup` does).
-    pub fn install(window: &WebviewWindow, look: SharedLook, settings: RenderSettings) -> Result<Self, String> {
+    pub fn install(
+        window: &WebviewWindow,
+        look: SharedLook,
+        settings: RenderSettings,
+        scene: Option<Arc<openps_scene::service::SceneService>>,
+    ) -> Result<Self, String> {
         let want_system = std::env::var("OPENPS_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("av"));
         let backend = match (want_system, MetalRenderer::new(look, settings)) {
             (false, Ok(m)) => Backend::Metal(Arc::new(m)),
@@ -205,8 +215,10 @@ impl Video {
             })
             .map_err(|e| e.to_string())?;
         let audio = Arc::new(AudioOut::system());
-        let decoding =
-            Arc::new(DecodingMedia::new(Arc::new(Output(backend.clone())), Some(audio.clone() as Arc<dyn MediaSink>)));
+        let decoding = Arc::new(DecodingMedia::new(
+            Arc::new(Output(backend.clone(), scene)),
+            Some(audio.clone() as Arc<dyn MediaSink>),
+        ));
         decoding.set_bgra(matches!(backend, Backend::Metal(_))); // the Metal pipeline reads BGRA
         let media: Arc<dyn MediaSink> = decoding;
         Ok(Video { media, audio, view: MainThreadView(view), backend })
@@ -292,6 +304,7 @@ impl Video {
                 stats["linear_active"] = serde_json::Value::Bool(s.linear_active);
                 stats["linear_unavailable"] = serde_json::Value::Bool(s.linear_unavailable);
                 stats["rcas_active"] = serde_json::Value::Bool(s.rcas_active);
+                stats["metalfx_fallback"] = serde_json::Value::Bool(s.metalfx_fallback);
                 stats["gpu_inflight"] = s.gpu_inflight.into();
                 stats["mailbox_len"] = s.mailbox_len.into();
                 stats["finish_guard"] = serde_json::json!({
@@ -305,7 +318,7 @@ impl Video {
                 });
                 stats["config"] = serde_json::json!({
                     "upscale_factor": c.upscale.factor(), "display_hz": c.display_hz, "gen_factor": c.gen_factor,
-                    "smooth": c.mode == FrameMode::Smooth, "camera": c.camera, "metalfx": c.metalfx, "fsr": c.fsr,
+                    "smooth": c.mode == FrameMode::Smooth, "camera": c.camera, "metalfx": c.metalfx, "fx_fallback": c.fx_fallback, "fsr": c.fsr,
                     "linear_light": c.linear_light, "adaptive": c.adaptive,
                     "sharpness": c.sharpness, "rcas": c.rcas, "saturation": c.saturation, "immersion": c.immersion,
                 });

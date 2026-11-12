@@ -1,0 +1,28 @@
+# game footage that is not part of the dataset (every extracted frame, the labeling page) and what is derived from it stays on this machine
+/data/
+/cache/
+# generated links into the labeled frames
+/dataset/sorted/
+
+# environments (scene.sh creates .venv; experiments/ may have its own)
+.venv*/
+
+__pycache__/
+*.pyc
+*.pt
+.DS_Store
+
+# model weights, converted models and arrays derived from them (rebuilt by train.sh;
+# the trained scene models themselves are /assets/models/ in the root .gitignore)
+/experiments/cache/
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.mlpackage
+*.mlmodel
+*.mlmodelc
+*.npy
+*.npz
+*.joblib
+*.pkl

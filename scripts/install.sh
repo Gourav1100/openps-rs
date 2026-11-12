@@ -58,6 +58,9 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/openps-app "$app/Contents/MacOS/openps-app"
 cp src-tauri/icons/icon.icns "$app/Contents/Resources/icon.icns"
+# the scene model (key maps that follow what the picture shows); without it the switch says it is not installed
+[[ -d assets/models ]] && cp -R assets/models "$app/Contents/Resources/models" ||
+  echo "note: no assets/models, so the scene switch stays unavailable (tools/scene-context/train.sh builds it; everything else works)"
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -69,8 +72,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>openps-app</string>
 <key>CFBundleIconFile</key><string>icon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>${version:-0.3.0}</string>
-<key>CFBundleVersion</key><string>${version:-0.3.0}</string>
+<key>CFBundleShortVersionString</key><string>${version:-0.4.0}</string>
+<key>CFBundleVersion</key><string>${version:-0.4.0}</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
@@ -79,6 +82,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSLocalNetworkUsageDescription</key><string>OpenPS talks to your PlayStation on your local network.</string>
 </dict></plist>
 PLIST
+# Signed before the data folder goes back in: it holds user files and a compiled-model cache that codesign cannot seal.
+# A fixed identifier keeps the bundle's identity the same across builds. An ad-hoc signature (the default) is still tied to this build's
+# code hash, so macOS asks again for Local Network access after a rebuild; a certificate in OPENPS_SIGN_IDENTITY (not for distribution
+# either unless it is a Developer ID) keeps the permission.
+sign_id=${OPENPS_SIGN_IDENTITY:--}
+codesign --force --deep --sign "$sign_id" --identifier app.openps.client "$app" ||
+  echo "note: signing failed; the app may need right-click > Open the first time, and Local Network access is asked for again"
 data="$app/Contents/MacOS/openps-data"
 if [[ -n $keep ]]; then mv "$keep/openps-data" "$data"; rmdir "$keep"; else mkdir -m 700 -p "$data"; fi
 chmod 700 "$data"
@@ -89,8 +99,6 @@ if (( ! nocreds )); then
     if [[ -f openps-data/$f && ! -e $data/$f ]]; then install -m 600 "openps-data/$f" "$data/$f"; echo "key map:     $data/$f (from ./openps-data)"; fi
   done
 fi
-# ad-hoc signature so macOS runs the bundle on this Mac (not a Developer ID signature: not for distribution)
-codesign --force --deep --sign - "$app" >/dev/null 2>&1 || echo "note: ad-hoc signing failed; the app may need right-click > Open the first time"
 echo
 echo "Installed: $app"
 echo "Run:       open \"$app\""

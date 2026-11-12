@@ -8,9 +8,11 @@ use openps_core::events::AppEvent;
 use openps_core::{Core, SessionState};
 use openps_input::engine::{Hotkey, UiEvent};
 use openps_input::overlay::OverlayState;
+use openps_input::scene::SceneLink;
 use openps_input::state::ControllerState;
 use openps_macinput::cursor::MacCursor;
 use openps_macinput::{InputHub, InputRunner, Output, RunnerConfig};
+use openps_scene::service::SceneService;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,16 +23,32 @@ pub struct InputState {
     look: openps_metal::look::SharedLook,
     runner: Mutex<Option<InputRunner>>,
     config_path: PathBuf,
+    /// What the scene detector sees and what the key map presses: shared by the engine and the detector's thread.
+    scene: Arc<SceneLink>,
+    scene_service: Arc<SceneService>,
 }
 
 impl InputState {
-    pub fn new(data_dir: &Path, look: openps_metal::look::SharedLook) -> Self {
+    pub fn new(app: &AppHandle, data_dir: &Path, look: openps_metal::look::SharedLook) -> Self {
+        let scene = Arc::new(SceneLink::new());
+        let handle = app.clone();
+        let notify = move || {
+            let _ = handle
+                .emit(crate::EVENT, AppEvent::Control { kind: "scene_model_ready".into(), detail: String::new() });
+        };
         Self {
             hub: Arc::new(InputHub::new()),
             look,
             runner: Mutex::new(None),
             config_path: data_dir.join("input.toml"),
+            scene_service: Arc::new(SceneService::start_notifying(scene.clone(), data_dir.join("cache"), notify)),
+            scene,
         }
+    }
+
+    /// The detector the video path feeds pictures to.
+    pub fn scene_service(&self) -> Arc<SceneService> {
+        self.scene_service.clone()
     }
 }
 
@@ -165,11 +183,12 @@ fn start(app: &AppHandle) {
         config_path: Some(st.config_path.clone()),
         enabled: false, // mapping starts off (the specified default); `start_enabled = true` in input.toml turns it on
     };
-    match InputRunner::start(
+    match InputRunner::start_with_scene(
         st.hub.clone(),
         cfg,
         Box::new(MacCursor::new()),
         Box::new(AppOutput { app: app.clone(), look: st.look.clone() }),
+        Some(st.scene.clone()),
     ) {
         Ok(r) => *slot = Some(r),
         Err(e) => {
@@ -182,6 +201,7 @@ fn start(app: &AppHandle) {
 fn stop(app: &AppHandle) {
     let Some(st) = app.try_state::<InputState>() else { return };
     let r = st.runner.lock().unwrap_or_else(PoisonError::into_inner).take();
+    st.scene.set_enabled(false); // detection is a switch for the stream that is running
     clear_pad_memory();
     if let Some(r) = r {
         r.stop(); // releases the cursor and sends a neutral pad
@@ -354,6 +374,12 @@ pub fn input_ui(st: tauri::State<'_, InputState>, event: serde_json::Value) {
     {
         r.ui_event(e);
     }
+}
+
+/// Whether the scene model has loaded (the page may have opened after the notice).
+#[tauri::command]
+pub fn scene_model_ready(st: tauri::State<'_, InputState>) -> bool {
+    st.scene_service().model_ready()
 }
 
 #[derive(serde::Serialize)]

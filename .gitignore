@@ -11,3 +11,17 @@ tasks/
 
 # video captures (OPENPS_VIDEO_CAPTURE): they contain the streamed picture
 /captures/
+
+# the trained scene models (about 200 MB): tools/scene-context/train.sh writes them and scripts/install.sh bundles them
+/assets/models/
+
+# model weights and converted models anywhere (the scene models are rebuilt by
+# tools/scene-context/train.sh)
+*.mlpackage
+*.mlmodel
+*.mlmodelc
+*.onnx
+*.safetensors
+*.ckpt
+*.pth
+*.pt

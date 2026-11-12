@@ -3,6 +3,7 @@
 
 use crate::config::{Binding, Config};
 use crate::keys::{Input, Key, MouseInput};
+use crate::scene::Layer;
 use crate::state::{Axis, Button, Control, ControllerState, Gesture};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -94,6 +95,7 @@ fn is_cmd(i: &Input) -> bool {
 pub struct Mapper {
     pub config: Config,
     pub profile: String,
+    layer: Layer,
     bindings: Vec<Binding>,
     mx: f64,
     my: f64,
@@ -116,10 +118,11 @@ pub struct Mapper {
 impl Mapper {
     pub fn new(config: Config, profile: Option<&str>) -> Result<Self, String> {
         let profile = profile.unwrap_or(&config.default_name).to_string();
-        let bindings = config.resolve(Some(&profile))?;
+        let bindings = config.resolve_layer(Some(&profile), Layer::OnFoot)?;
         Ok(Self {
             config,
             profile,
+            layer: Layer::OnFoot,
             bindings,
             mx: 0.0,
             my: 0.0,
@@ -140,9 +143,24 @@ impl Mapper {
     }
 
     pub fn set_profile(&mut self, name: &str) -> Result<(), String> {
-        self.bindings = self.config.resolve(Some(name))?;
+        self.bindings = self.config.resolve_layer(Some(name), self.layer)?;
         self.profile = name.to_string();
         self.reset();
+        Ok(())
+    }
+
+    pub fn layer(&self) -> Layer {
+        self.layer
+    }
+
+    /// Use another layer's keys (a profile in advanced mode). Nothing else changes: keys that are held keep working, they just mean what
+    /// the new layer says. A profile that is not in advanced mode has the same keys in every layer.
+    pub fn set_layer(&mut self, layer: Layer) -> Result<(), String> {
+        if layer == self.layer {
+            return Ok(());
+        }
+        self.bindings = self.config.resolve_layer(Some(&self.profile), layer)?;
+        self.layer = layer;
         Ok(())
     }
 

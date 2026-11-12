@@ -664,7 +664,7 @@ function pumpArt() {
         img.onerror = () => { img.onload = img.onerror = null; img.removeAttribute("src"); };
         img.src = uri;
       }
-    }).catch(() => {}).finally(() => { artActive--; pumpArt(); });
+    }).catch(() => { }).finally(() => { artActive--; pumpArt(); });
   }
 }
 let artObserver = null;
@@ -1409,7 +1409,7 @@ function paintEnginePop() {
 function engineNow(r) {
   const finish = [r.linear_active && !r.fsr_active && "linear light", r.rcas_active && "adaptive sharpening"].filter(Boolean).join(" + ");
   const up = r.upscaled ? `${r.fsr_active ? "FSR" : "MetalFX"} to ${r.upscale_height}p${finish ? ` (${finish})` : ""}` : "not upscaling";
-  const fg = !r.generating ? "none" : r.metalfx_active ? "MetalFX" : "our interpolator";
+  const fg = !r.generating ? "none" : r.metalfx_active ? "MetalFX" : r.metalfx_fallback ? "our interpolator (Dynamic: MetalFX paused, the GPU was too busy)" : "our interpolator";
   const a = r.adaptive || {};
   const rate = a.on && a.cap_hz ? ` Frame rate held to ${a.cap_hz} fps (asked for ${Math.round(a.asked_hz)}) because the GPU is too busy.` : "";
   return `In use now: upscaling ${up}; generated frames ${fg}.${rate}`;
@@ -1434,8 +1434,8 @@ function heldRate(r) {
 function paintEngineHint(s) {
   if ($("engine-field").hidden) return;
   $("engine-hint").textContent = s.engine === "fsr"
-    ? "AMD FidelityFX Super Resolution 1 (EASU), ported to Metal: an edge-adaptive upscaler that works on the finished picture, followed by the same sharpening as MetalFX. It has no linear-light mode. FSR only upscales: in Smooth mode at about 2× (60 to 120) MetalFX's frame generation still makes the in-between frame, and our own interpolator makes the frames at other rates. FSR 3 and FSR 4 need the game's depth, motion vectors and jitter, which a video stream does not carry, so only FSR 1 is offered; the details are in the user guide."
-    : "MetalFX is Apple's GPU upscaler. In Smooth mode at about 2× (60 to 120) it also makes the in-between frame; our own interpolator makes the frames at other rates.";
+    ? "AMD FidelityFX Super Resolution 1 (EASU), ported to Metal: an edge-adaptive upscaler that works on the finished picture, followed by the same sharpening as MetalFX. It has no linear-light mode. FSR only upscales: the Frame interpolator setting decides who makes the generated frames. FSR 3 and FSR 4 need the game's depth, motion vectors and jitter, which a video stream does not carry, so only FSR 1 is offered; the details are in the user guide."
+    : "MetalFX is Apple's GPU upscaler. Who makes the generated frames is the Frame interpolator setting.";
 }
 
 function drawSettings() {
@@ -1467,53 +1467,54 @@ function drawSettings() {
   setSwitch("linear-switch", lin, (on) => save({ linear_light: on }), upscaled && engine === "metalfx", engine === "fsr" ? "FSR has no linear-light mode" : "Needs upscaling: turn it on above");
   $("linear-hint").textContent = engine === "fsr" ? "FSR works on the picture as it is and has no linear-light mode."
     : !upscaled ? "Needs upscaling: turn it on above."
-    : lin ? "The MetalFX scaler works in linear light: more accurate colour and edges (measured closer to the real picture at every bitrate) for a little more GPU time."
-    : "Off: the MetalFX scaler's perceptual mode.";
+      : lin ? "The MetalFX scaler works in linear light: more accurate colour and edges (measured closer to the real picture at every bitrate) for a little more GPU time."
+        : "Off: the MetalFX scaler's perceptual mode.";
   const sharpOn = s.sharpness_on !== false;
   setSwitch("sharp-switch", sharpOn, (on) => save({ sharpness_on: on }), gpuOk, "Needs the GPU, not available on this device");
   rangeSetting("sharp-range", "sharp-out", "sharp-reset", s.sharpness ?? 60, 60, (v) => save({ sharpness: v }));
   setRangeEnabled("sharp", sharpOn && gpuOk);
   $("sharp-hint").textContent = !sharpOn ? (upscaled ? "Off: the picture as the upscaler draws it, with no blend with a plain enlargement." : "Off: the picture is neither sharpened nor softened.")
     : upscaled && engine === "fsr" ? "In percent: 0 is a plain smooth enlargement, 100 is FSR's EASU as it draws it, above 100 is sharper than that. FSR's edges are not over-sharpened the way MetalFX's are, so 100 leaves them as designed."
-    : upscaled ? "In percent: 0 is a plain smooth enlargement, 100 is the upscaler as it draws it, above 100 is sharper than that. The upscaler adds more edge contrast than the real picture has; about 60 (the default) is closest to it, and a light adaptive sharpening keeps it crisp there."
-    : "In percent: 50 leaves the picture as it is, above sharpens, below softens.";
+      : upscaled ? "In percent: 0 is a plain smooth enlargement, 100 is the upscaler as it draws it, above 100 is sharper than that. The upscaler adds more edge contrast than the real picture has; about 60 (the default) is closest to it, and a light adaptive sharpening keeps it crisp there."
+        : "In percent: 50 leaves the picture as it is, above sharpens, below softens.";
   const rcasOn = s.rcas_on !== false;
   setSwitch("rcas-switch", rcasOn, (on) => save({ rcas_on: on }), gpuOk, "Needs the GPU, not available on this device");
   rangeSetting("rcas-range", "rcas-out", "rcas-reset", s.rcas ?? 100, 100, (v) => save({ rcas: v }));
   setRangeEnabled("rcas", rcasOn && upscaled);
   $("rcas-hint").textContent = !gpuOk ? "Needs the Metal renderer."
     : !upscaled ? "Needs upscaling: turn it on above. It sharpens the upscaled picture."
-    : !rcasOn ? "Off: the upscaled picture is not sharpened beyond the sharpness setting."
-    : `Adaptive sharpening (AMD's RCAS) puts back crisp edges that the sharpness blend takes out, and leaves flat areas and noise alone. 0 is off, 100 % is the strength that measured closest to the real picture with MetalFX at sharpness 60 %, 200 % is twice that.${engine === "fsr" ? " FSR is made to be followed by RCAS." : ""}`;
+      : !rcasOn ? "Off: the upscaled picture is not sharpened beyond the sharpness setting."
+        : `Adaptive sharpening (AMD's RCAS) puts back crisp edges that the sharpness blend takes out, and leaves flat areas and noise alone. 0 is off, 100 % is the strength that measured closest to the real picture with MetalFX at sharpness 60 %, 200 % is twice that.${engine === "fsr" ? " FSR is made to be followed by RCAS." : ""}`;
   const satOn = s.saturation_on !== false;
   setSwitch("sat-switch", satOn, (on) => save({ saturation_on: on }), true);
   rangeSetting("sat-range", "sat-out", "sat-reset", s.saturation ?? 100, 100, (v) => save({ saturation: v }));
   setRangeEnabled("sat", satOn);
   $("sat-hint").textContent = satOn ? "100 % is the picture as the console sends it. Higher is more vivid, lower is paler." : "Off: the picture as the console sends it.";
   $("upscale-hint").textContent = gpuOk ? `Draws the picture larger than the stream's own ${s.height}p, using the GPU. The badge on each option is the size it gives for the resolution chosen above. The picture is made at that size even when the screen is smaller, and then scaled down to fit the window, which usually looks better than upscaling only to the window's size (it costs more GPU time the larger it is).` : "Hardware upscaling is not available on this device.";
-  // Frame generation has no rate to choose: it fills the display's refresh rate (the console streams 60, the rest are made here), and the
-  // adaptive frame rate steps it down in steps of 5 fps when this Mac cannot keep it up with every filter on.
+  // Frame generation is a target: a multiple of the stream's rate (the console streams 60, the rest are made here). The display's refresh
+  // rate caps it, and the adaptive frame rate (always on) steps it down in steps of 5 fps when this Mac cannot keep it up with every filter on.
   const nativeHz = 60; // the stream always runs at 60: what the game does not render is dropped as repeats, and at least 30 frames a second are kept
-  const fgOn = s.framegen_on !== false;
-  setSwitch("fg-switch", fgOn, (on) => save({ framegen_on: on }), gpuOk, "Needs the GPU, not available on this device");
-  const eff = effectiveRate(240, S.info.display_hz || 0);
-  const adaptive = s.adaptive_fps !== false;
-  const fallback = adaptive ? " If this Mac cannot keep that up with every filter on, the rate is lowered automatically, gently and in steps of 5 fps (see Adaptive frame rate)." : "";
+  const fg = [10, 15, 20, 25, 30].includes(s.frame_gen) ? s.frame_gen : 20;
+  const target = (nativeHz * fg) / 10;
+  buildSeg(document.querySelector('[data-setting="frame_gen"]'), [[10, "Off"], [15, "1.5×", `${nativeHz * 1.5} fps`], [20, "2×", `${nativeHz * 2} fps`], [25, "2.5×", `${nativeHz * 2.5} fps`], [30, "3×", `${nativeHz * 3} fps`]], fg, (v) => save({ frame_gen: v }), (v) => v !== 10 && !gpuOk, "Needs the GPU, not available on this device");
+  const eff = effectiveRate(target, S.info.display_hz || 0);
+  const fallback = " If this Mac cannot keep that up with every filter on, the rate is lowered automatically, gently and in steps of 5 fps.";
+  const gen = fg !== 10 && gpuOk && eff.hz > nativeHz * 1.01;
   $("fps-hint").textContent = !gpuOk ? "Needs the GPU, not available on this device."
-    : !fgOn ? `Frames are shown as they arrive from the console (${nativeHz} per second). Turn it on to have frames made here to fill your display.`
-    : !(hz >= 1) ? `Frames are generated to fill your display; the console sends ${nativeHz} per second.${fallback}`
-    : hz <= nativeHz && uncap ? `Your display refreshes at ${hz} Hz, but frames are made at up to 240 per second (Run above the display's refresh rate): the screen shows the newest one at each refresh.${fallback}`
-    : hz <= nativeHz ? `Your display refreshes at ${hz} Hz, which the stream's ${nativeHz} already fills, so nothing is generated. For a lower delay, turn on Run above the display's refresh rate.`
-    : eff.capped ? `${nativeHz} → ${hz} frames per second to fill your ${hz} Hz display: the console sends ${nativeHz}, the rest are generated here. Without variable refresh some frames stay on screen one refresh and some two.${fallback}`
-    : `${nativeHz} → ${Math.round(eff.hz)} frames per second to fill your ${hz} Hz display: the console sends ${nativeHz}, the rest are generated here.${fallback}`;
-  const uncap = !!s.uncapped_rate;
-  const gen = fgOn && gpuOk && (uncap || !(hz >= 1 && hz <= nativeHz));
+    : fg === 10 ? `Off: frames are shown as they arrive from the console (${nativeHz} per second).`
+      : !gen ? `Your display refreshes at ${hz} Hz, which the stream's ${nativeHz} already fills, so nothing is generated.`
+        : eff.hz < target - 0.5 ? `Aims for ${target} frames per second, but your ${hz} Hz display shows at most ${Math.round(eff.hz)}.${fallback}`
+          : `${nativeHz} → ${target} frames per second: the console sends ${nativeHz}, the rest are generated here.${eff.capped ? " Without variable refresh some frames stay on screen one refresh and some two." : ""}${fallback}`;
   buildSeg(document.querySelector('[data-setting="frame_mode"]'), [["smooth", "Smooth"], ["zero_latency", "Low latency"]], s.frame_mode || "smooth", (v) => save({ frame_mode: v }), () => !gen, "Only used when frames are generated");
-  $("mode-hint").textContent = !gen ? `Only used when frames are generated (frame generation on, and a display above the stream's ${nativeHz} Hz).` : (s.frame_mode === "smooth" ? "Interpolated between real frames: the smoothest picture. It adds about one frame of delay (17 ms at 60 fps), which is still low enough to feel responsive; camera prediction hides most of it when you look around." : "Lowest delay: real frames are shown the instant they arrive and extra frames are predicted forward. Nothing is added, but fast edges can show small artifacts.");
-  setSwitch("adapt-switch", s.adaptive_fps !== false, (on) => save({ adaptive_fps: on }), gpuOk, "Needs the GPU, not available on this device");
-  setSwitch("buffer-switch", s.pacing_buffer !== false, (on) => save({ pacing_buffer: on }), gpuOk && s.frame_mode !== "zero_latency", gpuOk ? "Only used in Smooth mode" : "Needs the GPU, not available on this device");
-  setSwitch("uncap-switch", uncap, (on) => save({ uncapped_rate: on }), gpuOk && fgOn, gpuOk ? "Needs frame generation" : "Needs the GPU, not available on this device");
+  $("mode-hint").textContent = !gen ? `Only used when frames are generated (frame generation on, and a display above the stream's ${nativeHz} Hz).` : (s.frame_mode === "smooth" ? "Interpolated between real frames: the smoothest picture. It adds about one frame of delay (17 ms at 60 fps), which is still low enough to feel responsive; camera prediction hides most of it when you look around. A smoothing buffer holds the picture back by how late the slowest recent frames arrive (up to 25 ms), so a late frame does not stall the motion." : "Lowest delay: real frames are shown the instant they arrive and extra frames are predicted forward. Nothing is added, but fast edges can show small artifacts.");
   const dbg = $("debug-switch");
+  const interp = ["builtin", "metalfx", "dynamic"].includes(s.interpolator) ? s.interpolator : "metalfx";
+  const smoothGen = gen && (s.frame_mode || "smooth") === "smooth";
+  buildSeg(document.querySelector('[data-setting="interpolator"]'), [["builtin", "Built-in"], ["metalfx", "MetalFX"], ["dynamic", "Dynamic"]], interp, (v) => save({ interpolator: v }), (v) => !smoothGen || (v !== "builtin" && !S.info.metalfx), !smoothGen ? "Only used when frames are generated in Smooth mode" : "MetalFX frame interpolation needs macOS 26");
+  $("interp-hint").textContent = !smoothGen ? "Only used when frames are generated in Smooth mode."
+    : interp === "builtin" ? "Our own interpolator makes every generated frame. It is the lightest on the GPU and makes a frame at any point between two real ones."
+      : interp === "metalfx" ? "Apple's MetalFX makes every generated frame, whatever it costs. It makes the frame halfway between two real ones, so it is smoothest at 2×; when the GPU cannot keep up, the frame rate is lowered instead."
+        : "MetalFX makes the generated frames while the GPU keeps up. When it cannot, the built-in interpolator takes over for a while (30 s, longer each time) before the frame rate is lowered, then MetalFX is tried again.";
   dbg.setAttribute("aria-checked", String(!!s.debug));
   dbg.onclick = () => save({ debug: !s.debug });
   paintEnginePop();
@@ -1845,7 +1846,7 @@ const onHud = (t) => t instanceof Element && !!t.closest(".hud-bar");
 function sendKey(ev, down) {
   if (!streaming() || ev.isComposing) return;
   if (down && ev.repeat && S.ov && S.ov.visible && (ev.key === "Enter" || ev.key === " ") && ev.target instanceof Element && ev.target.closest("#ov-rows, #ov-tabs")) { ev.preventDefault(); return; }
-  invoke("input_key", { code: ev.code, down, repeat: ev.repeat }).catch(() => {});
+  invoke("input_key", { code: ev.code, down, repeat: ev.repeat }).catch(() => { });
   // the game owns the keyboard while mapping is on (and Cmd shortcuts such as Cmd+Q still reach macOS)
   const typingIntoEditor = S.ov && S.ov.visible && !S.ov.mapping && (S.ov.capturing || S.ov.renaming);
   const filtering = document.activeElement === $("ov-filter") && !typingIntoEditor;
@@ -1856,11 +1857,11 @@ document.addEventListener("keyup", (ev) => sendKey(ev, false), true);
 const onOverlay = (t) => t instanceof Element && !!t.closest("#overlay");
 function sendButton(ev, down) {
   if (onOverlay(ev.target)) { // a click on the editor itself is never a binding
-    if (down) invoke("input_ui", { event: { type: "overlay_click" } }).catch(() => {});
+    if (down) invoke("input_ui", { event: { type: "overlay_click" } }).catch(() => { });
     return;
   }
   if (!streaming() || (!S.input.mapping && onHud(ev.target))) return; // HUD buttons keep working when mapping is off
-  invoke("input_button", { button: ev.button, down }).catch(() => {});
+  invoke("input_button", { button: ev.button, down }).catch(() => { });
   if (S.input.mapping) ev.preventDefault();
 }
 document.addEventListener("mousedown", (ev) => sendButton(ev, true), true);
@@ -1868,22 +1869,22 @@ document.addEventListener("mouseup", (ev) => sendButton(ev, false), true);
 document.addEventListener("contextmenu", (ev) => { if (streaming() && S.input.mapping) ev.preventDefault(); }, true);
 document.addEventListener("wheel", (ev) => {
   if (!streaming() || !S.input.mapping) return;
-  invoke("input_wheel", { dx: ev.deltaX, dy: ev.deltaY }).catch(() => {});
+  invoke("input_wheel", { dx: ev.deltaX, dy: ev.deltaY }).catch(() => { });
   ev.preventDefault();
 }, { capture: true, passive: false });
 
 function paintMapping() {
   const b = $("map-btn");
   b.setAttribute("aria-pressed", String(S.input.mapping));
-  const mapLabel = S.input.mapping ? `Keys & mouse: on${S.input.profile ? " · " + S.input.profile : ""}` : "Keys & mouse: off";
+  const mapLabel = S.input.mapping ? `Keys & mouse: on${S.input.profile ? " · " + S.input.profile : ""}${S.input.scene ? " · " + S.input.scene : ""}` : "Keys & mouse: off";
   // the tile says "Controls" and lights up when on; the profile name is in the tooltip and the accessible name (captions can be hidden)
   b.title = S.input.notice ? S.input.notice : `${mapLabel} (F10)`;
   b.setAttribute("aria-label", mapLabel);
   paintControllerMode();
 }
-$("map-btn").onclick = () => invoke("input_toggle").catch(() => {});
+$("map-btn").onclick = () => invoke("input_toggle").catch(() => { });
 // ---- the key-map editor ----------------------------------------------------------------------------------------------------
-const ui = (event) => invoke("input_ui", { event }).catch(() => {});
+const ui = (event) => invoke("input_ui", { event }).catch(() => { });
 const nice = (c) => c.replaceAll("_", " ").toLowerCase();
 // The console's own button symbols instead of words. The name stays as hidden text for screen readers and as a tooltip.
 // Keys and mouse buttons as little key caps and mouse pictures; the plain name stays as the tooltip and for screen readers.
@@ -1933,7 +1934,86 @@ const setHidden = (n, h) => { if (n.hidden !== h) n.hidden = h; };
 const ovRows = new Map(); // control -> { tr, cells: [cell, cell], hay }
 const ovTabs = new Map(); // profile name -> tab button
 let ovTabSeq = 0, ovTabSel = "", ovCapKey = "", ovFactsKey = "";
-const slotName = (slot) => (slot === 1 ? "key" : "alternate");
+const slotName = (slot) => ({ 1: "key", 2: "alternate", 3: "on foot", 4: "in vehicle", 5: "in menu" })[slot] || "key";
+// Columns 1-2 are the plain key map, 3-5 the layers of an advanced one; the table's `adv` class shows one set or the other.
+const SLOT_CLASS = ["plain", "plain", "adv col-on_foot", "adv col-in_vehicle", "adv col-in_menu"];
+const SCENE_NAMES = { on_foot: "On foot", in_vehicle: "In a vehicle", menu: "In a menu", cutscene: "In a cutscene" };
+const VIEW_NAMES = { first_person: "first person", third_person: "third person" };
+// What the scene detector says, as one line and a tone for its chip.
+function sceneText(sc) {
+  if (!sc || !sc.enabled) return { text: "Off", tone: "" };
+  if (sc.state === "idle") return { text: "Starts when the keyboard and mouse are on (not needed with a controller)", tone: "" };
+  if (sc.state === "unavailable") return { text: sc.note || "The scene model could not start.", tone: "warn" };
+  if (sc.state === "loading" || !sc.context) return { text: sc.state === "running" ? "Looking…" : "Preparing the model…", tone: "" };
+  const view = sc.view ? ` · ${VIEW_NAMES[sc.view] || sc.view}` : "";
+  return { text: `${SCENE_NAMES[sc.context] || sc.context}${view} · ${sc.confidence}%`, tone: "ok" };
+}
+// The key mode over the stream: one icon for the layer the keys follow right now (only while advanced mapping is on and the scene is known).
+const LAYER_BADGE = {
+  on_foot: { icon: "i-foot", name: "On foot keys" },
+  in_vehicle: { icon: "i-car", name: "Vehicle keys" },
+  in_menu: { icon: "i-menu", name: "Menu keys" },
+};
+function modeBadge(o) {
+  const sc = (o && o.scene) || {};
+  if (!o || !o.advanced || !sc.enabled) return null;
+  if (sc.state === "unavailable") return { icon: "i-alert", name: sc.note || "The scene model could not start.", mode: "warn" };
+  const b = sc.state === "running" && sc.context ? LAYER_BADGE[sc.layer] : null;
+  return b ? { icon: b.icon, name: b.name, mode: sc.layer } : null;
+}
+function paintModeBadge(o) {
+  const box = $("mode-badge");
+  const b = modeBadge(o);
+  setHidden(box, !b);
+  if (!b) return;
+  if (box.dataset.mode !== b.mode) box.dataset.mode = b.mode;
+  const use = box.querySelector("use");
+  if (use.getAttribute("href") !== `#${b.icon}`) use.setAttribute("href", `#${b.icon}`);
+  setText($("mode-badge-text"), b.name);
+  box.title = b.name;
+}
+const LAYERS = ["on_foot", "in_vehicle", "in_menu"];
+function labelCell(control) {
+  const sel = el("select", { className: "input label-pick", attrs: { "aria-label": `${nice(control)} action` } });
+  sel.onchange = () => S.ov && !S.ov.mapping && ui({ type: "label", control, label: sel.value || null });
+  return { td: el("td", { className: "adv col-action" }, sel), sel, key: "" };
+}
+function paintLabel(c, label, canLabel, actions, editable) {
+  const key = JSON.stringify([label, canLabel, editable, actions]);
+  if (c.key === key) return;
+  c.key = key;
+  c.sel.replaceChildren(el("option", { value: "", textContent: canLabel ? "No action" : "—" }), ...actions.map((a) => el("option", { value: a.name, textContent: a.title })));
+  c.sel.value = label || "";
+  c.sel.disabled = !canLabel || !editable;
+  c.sel.title = canLabel ? "" : "Only buttons and the triggers can have an action";
+}
+function paintModes(o) {
+  // the one switch: advanced mapping, which also runs the scene detector; it can be changed while streaming
+  setSwitch("ov-adv-switch", o.advanced, (on) => ui({ type: "advanced", enabled: on }));
+  const sc = o.scene || {};
+  const { text, tone } = sceneText(sc);
+  const chip = $("ov-scene-state");
+  setHidden(chip, !o.advanced);
+  setText(chip, text);
+  chip.className = `chip${tone ? ` chip-${tone}` : ""}`;
+  const live = o.advanced && sc.enabled && sc.context;
+  const layers = o.layers || { on_foot: true, in_vehicle: true, in_menu: true };
+  const inUse = LAYERS.filter((l) => layers[l]).length;
+  setHidden($("ov-layers"), !o.advanced);
+  for (const box of $$("#ov-layers input[data-layer]")) {
+    const on = !!layers[box.dataset.layer];
+    if (box.checked !== on) box.checked = on;
+    box.disabled = on && inUse === 1; // the last layer stays on
+  }
+  const table = $("ov-table");
+  for (const l of LAYERS) table.classList.toggle(`off-${l}`, !layers[l]);
+  table.classList.toggle("adv", !!o.advanced);
+  $("overlay").classList.toggle("adv", !!o.advanced);
+  if (table.dataset.active !== (live ? sc.layer : "")) table.dataset.active = live ? sc.layer : "";
+}
+for (const box of $$("#ov-layers input[data-layer]")) {
+  box.addEventListener("change", () => ui({ type: "layer_enabled", layer: box.dataset.layer, enabled: box.checked }));
+}
 function bindCell(control, slot) {
   const b = el("button", { type: "button", className: "bind" });
   b.onclick = () => S.ov && !S.ov.mapping && ui({ type: "edit", control, slot });
@@ -2025,6 +2105,7 @@ function renderOverlay() {
   setHidden($("ov-lock"), editable);
   setText($("ov-notice"), o.notice || "");
   paintTabs(o, editable);
+  paintModes(o);
   for (const id of ["ov-add", "ov-rename", "ov-reset", "ov-delete"]) if ($(id).disabled === editable) $(id).disabled = !editable;
   setHidden($("ov-renaming"), !o.renaming);
   if (o.renaming) setText($("ov-rename-text"), o.renaming.text + "▏");
@@ -2047,13 +2128,15 @@ function renderOverlay() {
     seen.add(r.control);
     let row = ovRows.get(r.control);
     if (!row) {
-      const cells = [bindCell(r.control, 1), bindCell(r.control, 2)];
-      row = { tr: el("tr", {}, el("td", { className: "ctl" }, glyph(r.control)), cells[0].td, cells[1].td), cells, hay: "" };
+      const cells = [1, 2, 3, 4, 5].map((s) => { const c = bindCell(r.control, s); c.td.className = SLOT_CLASS[s - 1]; return c; });
+      const label = labelCell(r.control);
+      row = { tr: el("tr", {}, el("td", { className: "ctl" }, glyph(r.control)), ...cells.map((c) => c.td), label.td), cells, label, hay: "" };
       ovRows.set(r.control, row);
     }
-    row.hay = `${nice(r.control)}\n${r.primary.toLowerCase()}\n${r.secondary.toLowerCase()}`;
-    paintCell(row.cells[0], r.control, 1, r.primary, !!cap && cap.control === r.control && cap.slot === 1, editable);
-    paintCell(row.cells[1], r.control, 2, r.secondary, !!cap && cap.control === r.control && cap.slot === 2, editable);
+    const texts = [r.primary, r.secondary, r.on_foot, r.in_vehicle, r.in_menu];
+    row.hay = [nice(r.control), ...texts.map((t) => t.toLowerCase()), r.label ? nice(r.label) : ""].join("\n");
+    texts.forEach((t, k) => paintCell(row.cells[k], r.control, k + 1, t, !!cap && cap.control === r.control && cap.slot === k + 1, editable));
+    paintLabel(row.label, r.label, r.can_label, o.actions || [], editable);
     if (body.children[i] !== row.tr) body.insertBefore(row.tr, body.children[i] || null);
     i++;
   }
@@ -2074,9 +2157,9 @@ function renderOverlay() {
     $("ov-hotkeys").replaceChildren(...o.hotkeys.map(row));
   }
 }
-$("ov-close").onclick = () => invoke("input_overlay").catch(() => {});
-$("ov-off").onclick = () => invoke("input_toggle").catch(() => {});
-$("edit-keys-btn").onclick = () => invoke("input_overlay").catch(() => {});
+$("ov-close").onclick = () => invoke("input_overlay").catch(() => { });
+$("ov-off").onclick = () => invoke("input_toggle").catch(() => { });
+$("edit-keys-btn").onclick = () => invoke("input_overlay").catch(() => { });
 // A new key map starts as a copy of one that exists: the one being edited is highlighted (the default one when nothing else was picked).
 function chooseCopySource(names, current) {
   const dlg = $("copy-dialog"), list = $("copy-list");
@@ -2122,8 +2205,11 @@ function onInputEvent(e) {
   S.ov = e.overlay || null;
   renderOverlay();
   const was = S.input.mapping;
-  S.input = { mapping: !!o.mapping, profile: o.profile || "", notice: o.notice || "" };
+  // what the key map is following right now (advanced key maps with scene detection on): shown on the Controls tile and announced on a change
+  const sc = o.advanced && o.scene && o.scene.enabled && o.scene.context ? o.scene.context : "";
+  S.input = { mapping: !!o.mapping, profile: o.profile || "", notice: o.notice || "", scene: sc ? SCENE_NAMES[sc].toLowerCase() : "" };
   paintMapping();
+  paintModeBadge(o);
   $("hud").classList.toggle("locked", S.input.mapping);
   if (was !== S.input.mapping && streaming()) {
     wakeHud(); // the cursor is released (or hidden): show where the controls are
@@ -2359,32 +2445,33 @@ function debugModel() {
   if (metal) {
     run.push(!upscaling ? ["off", "Upscaling", "off"]
       : r.upscaled ? ["on", "Upscaling", `${r.fsr_active ? "FSR (EASU)" : "MetalFX"} to ${r.upscale_height}p (${Math.round(c.upscale_factor * 100) / 100}× of ${st.height}p)`]
-      : ["warn", "Upscaling", `asked for ${Math.round(c.upscale_factor * 100) / 100}×, nothing to upscale to yet`]);
+        : ["warn", "Upscaling", `asked for ${Math.round(c.upscale_factor * 100) / 100}×, nothing to upscale to yet`]);
     run.push(!r.upscaled ? ["off", "Finishing pass", "off (no upscaled picture)"]
       : r.finish_pass ? ["on", "Finishing pass", `on: ${r.fsr_active ? "" : "colour conversion, "}sharpness blend and adaptive sharpening in one GPU pass`]
-      : fg.off ? ["warn", "Finishing pass", "given up by the guard (the GPU was too busy): plain upscaler"] : ["off", "Finishing pass", "off: the blend is made in the present pass"]);
+        : fg.off ? ["warn", "Finishing pass", "given up by the guard (the GPU was too busy): plain upscaler"] : ["off", "Finishing pass", "off: the blend is made in the present pass"]);
     run.push(!r.upscaled ? ["off", "Linear light", "off (no upscaling)"]
       : r.fsr_active ? ["na", "Linear light", "FSR has no linear-light mode"]
-      : st.linear_light === false ? ["off", "Linear light", "off by choice: the scaler's perceptual mode"]
-      : r.linear_active ? ["on", "Linear light", "on: the scaler works in linear light (half floats)"]
-      : r.linear_unavailable ? ["warn", "Linear light", "this Mac could not make the linear scaler: perceptual mode"]
-      : ["off", "Linear light", fg.off ? "off (guard): perceptual mode" : "off: perceptual mode"]);
+        : st.linear_light === false ? ["off", "Linear light", "off by choice: the scaler's perceptual mode"]
+          : r.linear_active ? ["on", "Linear light", "on: the scaler works in linear light (half floats)"]
+            : r.linear_unavailable ? ["warn", "Linear light", "this Mac could not make the linear scaler: perceptual mode"]
+              : ["off", "Linear light", fg.off ? "off (guard): perceptual mode" : "off: perceptual mode"]);
     run.push(st.sharpness_on === false ? ["off", r.upscaled ? "Sharpness blend" : "Sharpness (unsharp)", "off by choice: the picture is left as the upscaler draws it"]
       : ["on", r.upscaled ? "Sharpness blend" : "Sharpness (unsharp)", r.upscaled ? `${dbgPct(c.sharpness)}: ${r.finish_pass ? "blended in the finishing pass" : "blended in the present pass"} (0 plain, 100 as the upscaler draws it)` : `${dbgPct(c.sharpness)} (50 % leaves the picture alone)`]);
     run.push(!r.upscaled ? ["off", "Adaptive sharpening", "off (needs upscaling)"]
       : st.rcas_on === false ? ["off", "Adaptive sharpening", "off by choice"]
-      : r.rcas_active ? ["on", "Adaptive sharpening", `RCAS on, ${dbgPct(c.rcas)} (lobe ${(0.25 * c.rcas).toFixed(3)})`]
-      : c.rcas > 0 ? ["warn", "Adaptive sharpening", `set to ${dbgPct(c.rcas)} but not applied (${fg.off ? "guard" : "no finishing pass"})`] : ["off", "Adaptive sharpening", "off (0 %)"]);
+        : r.rcas_active ? ["on", "Adaptive sharpening", `RCAS on, ${dbgPct(c.rcas)} (lobe ${(0.25 * c.rcas).toFixed(3)})`]
+          : c.rcas > 0 ? ["warn", "Adaptive sharpening", `set to ${dbgPct(c.rcas)} but not applied (${fg.off ? "guard" : "no finishing pass"})`] : ["off", "Adaptive sharpening", "off (0 %)"]);
     run.push(st.saturation_on === false ? ["off", "Saturation", "off by choice (the picture as the console sends it)"]
       : [c.saturation === 1 ? "off" : "on", "Saturation", `${dbgPct(c.saturation)}${c.saturation === 1 ? " (untouched)" : ""}`]);
-    const who = r.metalfx_active ? "MetalFX" : "the built-in interpolator";
-    run.push(!r.generating ? ["off", "Frame generation", st.framegen_on === false ? "off by choice: frames are shown as they arrive" : `nothing to generate: the display (${Math.round(r.refresh_hz)} Hz) shows no more than the stream's rate, or the adaptive frame rate holds it there`]
+    const who = r.metalfx_active ? "MetalFX" : r.metalfx_fallback ? "the built-in interpolator (Dynamic: MetalFX paused, the GPU was too busy)" : "the built-in interpolator";
+    run.push(!r.generating ? ["off", "Frame generation", st.frame_gen === 10 ? "off by choice: frames are shown as they arrive" : `nothing to generate: the display (${Math.round(r.refresh_hz)} Hz) shows no more than the stream's rate, or the adaptive frame rate holds it there`]
       : ["on", "Frame generation", `${mult}× to ${Math.round(r.target_hz)} Hz by ${who}, ${c.smooth ? "Smooth (one frame of delay)" : "Low latency (predicts forward)"}`]);
     run.push(c.camera ? ["on", "Camera compensation", r.camera_active ? `active, ${Math.round(r.camera_lag_ms)} ms lag, ${dbgPct(r.camera_explained)} explained` : "armed, nothing to compensate now"] : ["off", "Camera compensation", "off"]);
     run.push(r.generating ? [r.input_prior_active ? "on" : "off", "Input motion prior", r.input_prior_active ? `the stick's motion (${Math.round(r.camera_lag_ms)} ms lag, ${dbgPct(r.camera_explained)} explained) guides the motion search` : "learning the game's response to the stick (needs a few seconds of camera movement), or the picture alone is used"] : ["off", "Input motion prior", "frame generation is off"]);
     run.push([c.immersion ? "on" : "off", "Immersion", c.immersion ? "on (glow in the black bars)" : "off"]);
   }
-  run.push(["on", "Engine chosen", st.engine === "fsr" ? "FSR upscales; MetalFX makes the generated midpoints at about 2×, the built-in interpolator the other rates" : "MetalFX (it also makes the midpoints at about 2×; the built-in interpolator covers the other rates)"]);
+  run.push(["on", "Engine chosen", st.engine === "fsr" ? "FSR upscales" : "MetalFX upscales"]);
+  run.push(["on", "Interpolator chosen", st.interpolator === "builtin" ? "built-in" : st.interpolator === "dynamic" ? "Dynamic: MetalFX, the built-in interpolator when the GPU cannot keep up" : "MetalFX for every generated frame"]);
   add("Running", run);
 
   // what the machine offers
@@ -2400,11 +2487,11 @@ function debugModel() {
     const gr = [];
     gr.push(!ad.on ? ["off", "Adaptive frame rate", "off: the rate is kept; the finishing-pass guard below gives the filters up instead"]
       : ad.cap_hz > 0 ? ["warn", "Adaptive frame rate", `holding ${heldRate(r)} fps (${Math.round(ad.asked_hz)} asked for): the GPU is busy ${Math.round(ad.load * 100)} % of the time (${Math.round(ad.peak * 100)} % of the time between two pictures for the slowest) at this rate${heldRate(r) < ad.cap_hz ? `; it could hold ${ad.cap_hz}, but a ${Math.round(r.refresh_hz)} Hz display shows ${heldRate(r)} evenly (every picture for the same number of refreshes)` : ""}. Steps of ${ad.step_hz} fps; it goes back up when there is room`]
-      : [ad.over_s > 0 ? "warn" : "on", "Adaptive frame rate", `watching: GPU busy ${Math.round(ad.load * 100)} % of the time (down above ${Math.round(ad.heavy_mean * 100)} %), the slowest pictures take ${Math.round(ad.peak * 100)} % of the time between two (down above ${Math.round(ad.heavy_peak * 100)} %)${ad.over_s > 0 ? `; too high for ${ad.over_s.toFixed(1)} of ${ad.down_after_s} s` : ""}; ${Math.round(ad.asked_hz)} fps asked for, nothing held back`]);
+        : [ad.over_s > 0 ? "warn" : "on", "Adaptive frame rate", `watching: GPU busy ${Math.round(ad.load * 100)} % of the time (down above ${Math.round(ad.heavy_mean * 100)} %), the slowest pictures take ${Math.round(ad.peak * 100)} % of the time between two (down above ${Math.round(ad.heavy_peak * 100)} %)${ad.over_s > 0 ? `; too high for ${ad.over_s.toFixed(1)} of ${ad.down_after_s} s` : ""}; ${Math.round(ad.asked_hz)} fps asked for, nothing held back`]);
     gr.push(ad.on ? ["off", "Finishing-pass guard", "not used: the adaptive frame rate lowers the rate instead of giving filters up"]
       : !upscaling ? ["off", "Finishing-pass guard", "idle (not upscaling)"]
-      : fg.off ? ["warn", "Finishing-pass guard", "TRIPPED: linear light and adaptive sharpening are off until the upscaling, sharpness, adaptive sharpening or frame settings change"]
-      : [fg.slow > 0 ? "warn" : "on", "Finishing-pass guard", `watching: ${fg.slow}/${fg.limit} pictures in a row over ${dbgMs(fg.ms)} of GPU time (now ${dbgMs(r.gpu_ms)} on average)`]);
+        : fg.off ? ["warn", "Finishing-pass guard", "TRIPPED: linear light and adaptive sharpening are off until the upscaling, sharpness, adaptive sharpening or frame settings change"]
+          : [fg.slow > 0 ? "warn" : "on", "Finishing-pass guard", `watching: ${fg.slow}/${fg.limit} pictures in a row over ${dbgMs(fg.ms)} of GPU time (now ${dbgMs(r.gpu_ms)} on average)`]);
     add("Safety guards", gr);
 
     // timing
@@ -2415,8 +2502,7 @@ function debugModel() {
       [r.shown_jitter_ms > 2.5 || r.shown_late > 0 ? "warn" : "on", "Frame pacing", `±${dbgMs(r.shown_jitter_ms)}, longest gap ${dbgMs(r.shown_max_ms)}, ${r.shown_late} late in the last 2 s`],
       [r.gpu_ms > 0.7 * interval ? "warn" : "on", "GPU time", `${dbgMs(r.gpu_ms, 2)} per picture of ${dbgMs(interval)}; ${r.gpu_inflight} in flight`],
       ["on", "Latency", `frame wait ${dbgMs(r.frame_wait_ms)}, to the screen ${dbgMs(r.present_latency_ms)}, queue ${dbgMs(r.queue_delay_ms)}, network jitter ${dbgMs(r.network_jitter_ms)}`],
-      [r.playout_ms > 0.5 ? "on" : "off", "Smoothing buffer", c.smooth ? (st.pacing_buffer === false ? "off by choice: a late frame is a stall of its own lateness" : `holding the picture back ${dbgMs(r.playout_ms)} (up to 25 ms) so frames that arrive late are still in time`) : "not used in Low latency mode"],
-      [r.uncapped_active ? "on" : "off", "Above the display's rate", r.uncapped_active ? `frames made and handed over at up to ${Math.round(r.target_hz)} per second on a ${Math.round(r.refresh_hz)} Hz display: the newest is shown at each refresh` : st.uncapped_rate ? "chosen, but not in use (full screen, or no frame generation)" : "off (the display's refresh rate is the limit)"],
+      [r.playout_ms > 0.5 ? "on" : "off", "Smoothing buffer", c.smooth ? `holding the picture back ${dbgMs(r.playout_ms)} (up to 25 ms) so frames that arrive late are still in time` : "not used in Low latency mode"],
       [r.mailbox_drops > 0 ? "warn" : "on", "Frames", `${r.real_frames} real, ${r.generated} generated, ${r.presented} shown; ${r.mailbox_drops} dropped for being late, ${r.mailbox_len} waiting`],
       [r.errors > 0 ? "bad" : "on", "GPU errors", String(r.errors)],
     ]);
@@ -2527,6 +2613,13 @@ function onSessionEvent(e) {
 }
 
 // ---- events from the core -------------------------------------------------------------------------------------------------
+// The scene model loads in the background as the app starts; the notice comes as an event, or is asked for when the page opened later.
+let sceneModelShown = false;
+function sceneModelReady() {
+  if (sceneModelShown) return;
+  sceneModelShown = true;
+  toast("Scene model loaded", "ok");
+}
 listen("openps://event", ({ payload: e }) => {
   switch (e.type) {
     case "session": onSessionEvent(e); break;
@@ -2543,6 +2636,7 @@ listen("openps://event", ({ payload: e }) => {
       }
       else if (e.kind === "remote_step") { $("psn-remote-step").textContent = `${e.detail}…`; $("pair-psn-step").textContent = `${e.detail}…`; }
       else if (e.kind === "psn_error") toast(`PSN sign-in did not complete: ${e.detail}`, "error");
+      else if (e.kind === "scene_model_ready") sceneModelReady();
       else log(`console: ${e.kind}${e.detail ? " " + e.detail : ""}`);
       break;
   }
@@ -2624,6 +2718,7 @@ $("log-copy").onclick = async () => {
   $("demo-badge").hidden = !S.info.demo;
   for (const n of S.info.notices || []) showNotice(n.kind, n.detail);
   log(`OpenPS ${S.info.version}${S.info.demo ? " (demo mode)" : ""}`);
+  call("scene_model_ready").then(([, ready]) => { if (ready) sceneModelReady(); });
   const [, st] = await call("session_state");
   if (st) S.session = st;
   await loadPsn();

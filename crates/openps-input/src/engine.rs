@@ -8,16 +8,18 @@
 //! Includes rebinding capture (mapping OFF, overlay visible), profile rename by typing, overlay UI
 //! events and saving through [`Editor`].
 
-use crate::config::{load_path, Config};
+use crate::config::{can_carry_action, load_path, Advanced, Config};
 use crate::editor::Editor;
 use crate::keys::{chord_to_str, Chord, Input, Key, MouseInput};
 use crate::mapping::{InputSnapshot, Mapper};
 pub use crate::overlay::OverlayState;
 use crate::overlay::{build_state, Capturing, Renaming, MAX_PROFILES, SENS_MAX, SENS_MIN};
-use crate::state::{parse_control, ControllerState};
+use crate::scene::{Action, Layer, SceneLink, SceneStatus};
+use crate::state::{parse_control, Axis, Control, ControllerState};
 use crate::textinput::{apply_key, is_confirm, TextAction};
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub const IDLE_HZ: f64 = 50.0;
 pub const FOCUS_POLL_S: f64 = 0.1;
@@ -89,6 +91,18 @@ pub enum UiEvent {
     ProfileAddFrom(String),
     ProfileDelete(String),
     ProfileRename(String),
+    /// Switch an advanced profile's mode on or off (saved). It also switches scene detection, and works while mapping is on.
+    Advanced(bool),
+    /// Use a layer of the advanced profile or not (saved), like the advanced switch while mapping is on too. The last layer in use stays.
+    LayerEnabled {
+        layer: String,
+        enabled: bool,
+    },
+    /// Put an action label on a control, or take it off (`None`) (saved).
+    Label {
+        control: String,
+        label: Option<String>,
+    },
 }
 
 impl UiEvent {
@@ -115,6 +129,18 @@ impl UiEvent {
             },
             "profile_delete" => UiEvent::ProfileDelete(name()),
             "profile_rename" => UiEvent::ProfileRename(name()),
+            "advanced" => UiEvent::Advanced(v.get("enabled")?.as_bool()?),
+            "layer_enabled" => UiEvent::LayerEnabled {
+                layer: v.get("layer")?.as_str()?.to_string(),
+                enabled: v.get("enabled")?.as_bool()?,
+            },
+            "label" => UiEvent::Label {
+                control: control()?,
+                label: match v.get("label") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(l) => Some(l.as_str()?.to_string()),
+                },
+            },
             _ => return None,
         })
     }
@@ -183,6 +209,11 @@ pub struct Engine<P: Platform> {
     /// Mouse movement is ignored until this time (just after the cursor was captured).
     mouse_hold_until: f64,
     panicking: bool,
+    scene: Arc<SceneLink>,
+    last_scene: SceneStatus,
+    last_scene_poll: f64,
+    /// Controls whose action label was held on the last tick (an action is a press, not a hold).
+    labeled_down: BTreeSet<Control>,
 }
 
 impl<P: Platform> Engine<P> {
@@ -220,7 +251,21 @@ impl<P: Platform> Engine<P> {
             last_dog: f64::NEG_INFINITY,
             mouse_hold_until: f64::NEG_INFINITY,
             panicking: false,
+            scene: Arc::new(SceneLink::new()),
+            last_scene: SceneStatus::default(),
+            last_scene_poll: f64::NEG_INFINITY,
+            labeled_down: BTreeSet::new(),
         })
+    }
+
+    /// Share a scene link with the scene detector (the engine makes its own, unused one otherwise).
+    pub fn with_scene(mut self, link: Arc<SceneLink>) -> Self {
+        self.scene = link;
+        self
+    }
+
+    pub fn scene(&self) -> &Arc<SceneLink> {
+        &self.scene
     }
 
     /// The file overlay edits are saved to (the one this run was started with).
@@ -444,6 +489,7 @@ impl<P: Platform> Engine<P> {
             if self.now < self.notice_until { self.notice.clone() } else { String::new() },
             self.rename.as_ref().map(|r| Renaming { name: r.old.clone(), text: r.text.clone() }),
             self.mapper.click_modes(),
+            self.scene.status(),
         )
     }
 
@@ -600,12 +646,15 @@ impl<P: Platform> Engine<P> {
         self.process_ui_events();
         self.poll_capture(mono);
         self.poll_text(mono);
+        self.poll_scene(mono);
         if self.live() {
             let mut snap = self.platform.snapshot();
             if mono < self.mouse_hold_until {
                 (snap.mouse_dx, snap.mouse_dy) = (0.0, 0.0);
             }
+            self.sync_layer();
             let st = self.mapper.map(&snap, mono);
+            self.emit_actions(&st);
             self.platform.send_pad(&st);
             for ev in self.mapper.pop_events() {
                 self.beep("Tink", false);
@@ -619,6 +668,76 @@ impl<P: Platform> Engine<P> {
 
 // ---- editing through the overlay (mapping OFF only) ------------------------------------------------------
 impl<P: Platform> Engine<P> {
+    /// The profile in use is in advanced mode.
+    fn advanced_on(&self) -> bool {
+        self.cfg.advanced_of(self.profile()).is_some_and(|a| a.enabled)
+    }
+
+    /// An advanced profile uses the keys of the layer the scene detector reports (on foot while it is off).
+    fn sync_layer(&mut self) {
+        let layer = if self.advanced_on() { self.scene.layer() } else { Layer::OnFoot };
+        if layer != self.mapper.layer() {
+            let _ = self.mapper.set_layer(layer);
+        }
+    }
+
+    /// A press of a labeled control is what the scene detector is told about, whatever keys it was bound to.
+    fn emit_actions(&mut self, st: &ControllerState) {
+        let labeled: Vec<(Control, Action)> = match self.cfg.advanced_of(self.profile()) {
+            Some(a) if a.enabled && !a.labels.is_empty() => a
+                .labels
+                .keys()
+                .filter_map(|c| Some((parse_control(c).ok()?, a.label_of(c)?)))
+                .filter(|(c, _)| can_carry_action(*c))
+                .collect(),
+            _ => vec![],
+        };
+        if labeled.is_empty() {
+            self.labeled_down.clear();
+            return;
+        }
+        let held = |c: Control| match c {
+            Control::Button(b) => st.buttons.contains(&b),
+            Control::Axis(Axis::L2) => st.l2 > 0.5,
+            Control::Axis(Axis::R2) => st.r2 > 0.5,
+            _ => false,
+        };
+        let mut down = BTreeSet::new();
+        for (c, action) in labeled {
+            if held(c) {
+                down.insert(c);
+                if !self.labeled_down.contains(&c) {
+                    self.scene.push_action(action);
+                }
+            }
+        }
+        self.labeled_down = down;
+    }
+
+    /// Show the overlay and the HUD when what the detector believes changes (at most ten times a second).
+    fn poll_scene(&mut self, now: f64) {
+        if now - self.last_scene_poll < 0.1 {
+            return;
+        }
+        self.last_scene_poll = now;
+        // advanced mapping is what switches scene detection on, and it only matters while the key map drives the console (with mapping
+        // off a physical controller does)
+        self.scene.set_enabled(self.advanced_on());
+        self.scene.set_active(self.enabled);
+        self.scene.set_layers(self.cfg.advanced_of(self.profile()).map(Advanced::enabled_layers).unwrap_or_default());
+        // only a key map that is live and has labels can say that nothing changed because nothing was pressed
+        let labeled: Vec<Action> = match self.cfg.advanced_of(self.profile()) {
+            Some(a) if self.live() && a.enabled => a.labels.keys().filter_map(|c| a.label_of(c)).collect(),
+            _ => vec![],
+        };
+        self.scene.set_labeled(labeled);
+        let status = self.scene.status();
+        if status != self.last_scene {
+            self.last_scene = status;
+            self.push_overlay();
+        }
+    }
+
     pub fn push_ui_event(&mut self, e: UiEvent) {
         self.ui_events.push_back(e);
     }
@@ -641,6 +760,19 @@ impl<P: Platform> Engine<P> {
                 self.end_capture("");
                 return;
             }
+            // a live switch, like the profile keys: it works while mapping is on (the detector starts and stops with it)
+            UiEvent::Advanced(on) => {
+                if self.overlay_visible() {
+                    self.set_advanced(on);
+                }
+                return;
+            }
+            UiEvent::LayerEnabled { layer, enabled } => {
+                if self.overlay_visible() {
+                    self.set_layer_enabled(&layer, enabled);
+                }
+                return;
+            }
             _ => {}
         }
         if self.enabled {
@@ -654,15 +786,18 @@ impl<P: Platform> Engine<P> {
         match e {
             UiEvent::Edit { control, slot } | UiEvent::Clear { control, slot } => {
                 let Ok(ctl) = parse_control(&control) else { return };
-                if slot != 1 && slot != 2 {
+                let slot = u8::try_from(slot).unwrap_or(0);
+                let valid = if self.advanced_on() { Layer::from_slot(slot).is_some() } else { slot == 1 || slot == 2 };
+                if !valid {
                     return;
                 } // the UI is not trusted to send sane numbers
                 if clear {
-                    self.save_binding(ctl.name(), slot as u8, None);
+                    self.save_binding(ctl.name(), slot, None);
                 } else {
-                    self.begin_capture(ctl.name(), slot as u8);
+                    self.begin_capture(ctl.name(), slot);
                 }
             }
+            UiEvent::Label { control, label } => self.set_label(&control, label.as_deref()),
             UiEvent::Pick(name) => self.pick_mouse_button(&name),
             UiEvent::ProfileReset => self.reset_profile_request(),
             UiEvent::Slider { value, final_ } => self.set_sensitivity(value, final_),
@@ -671,7 +806,7 @@ impl<P: Platform> Engine<P> {
             UiEvent::ProfileAddFrom(n) => self.profile_request("add", &n),
             UiEvent::ProfileDelete(n) => self.profile_request("delete", &n),
             UiEvent::ProfileRename(n) => self.profile_request("rename", &n),
-            UiEvent::OverlayClick | UiEvent::Cancel => {}
+            UiEvent::OverlayClick | UiEvent::Cancel | UiEvent::Advanced(_) | UiEvent::LayerEnabled { .. } => {}
         }
     }
 
@@ -1015,19 +1150,82 @@ impl<P: Platform> Engine<P> {
         let Ok(ctl) = parse_control(control) else { return };
         let c2 = chord.clone();
         if !self.edit_config(&mut |ed| {
-            match &c2 {
-                None => ed.clear_slot(ctl, slot),
-                Some(c) => ed.set_slot(ctl, slot, c),
+            match (Layer::from_slot(slot), &c2) {
+                (Some(l), None) => ed.clear_layer_slot(ctl, l),
+                (Some(l), Some(c)) => ed.set_layer_slot(ctl, l, c),
+                (None, None) => ed.clear_slot(ctl, slot),
+                (None, Some(c)) => ed.set_slot(ctl, slot, c),
             }
             Ok(None)
         }) {
             return;
         }
-        let slot_name = if slot == 1 { "primary" } else { "secondary" };
+        let slot_name = match (Layer::from_slot(slot), slot) {
+            (Some(Layer::OnFoot), _) => "on foot",
+            (Some(Layer::InVehicle), _) => "in vehicle",
+            (Some(Layer::InMenu), _) => "in menu",
+            (None, 1) => "primary",
+            (None, _) => "secondary",
+        };
         self.beep("Tink", false);
         match chord {
             Some(c) => self.say(format!("{control} ({slot_name}) = {}", chord_to_str(&c))),
             None => self.say(format!("{control} {slot_name} deleted")),
+        }
+    }
+
+    fn set_advanced(&mut self, on: bool) {
+        if self.advanced_on() == on {
+            return;
+        }
+        if self.edit_config(&mut |ed| {
+            ed.set_advanced(on);
+            Ok(None)
+        }) {
+            self.beep("Tink", false);
+            self.say(if on {
+                "Advanced mapping on: the keys follow the scene.".into()
+            } else {
+                "Advanced mapping off: primary and secondary keys.".into()
+            });
+        }
+    }
+
+    fn set_layer_enabled(&mut self, layer: &str, on: bool) {
+        let Some(l) = Layer::parse(layer) else { return };
+        if self.cfg.advanced_of(self.profile()).is_some_and(|a| a.layer_enabled(l) == on) {
+            return;
+        }
+        let mut kept = true;
+        if self.edit_config(&mut |ed| {
+            kept = ed.set_layer_enabled(l, on);
+            Ok(None)
+        }) {
+            let name = layer.replace('_', " ");
+            if kept {
+                self.beep("Tink", false);
+                self.say(format!("The {name} keys are {}.", if on { "in use" } else { "not used" }));
+            } else {
+                self.say("At least one layer has to stay on.".into());
+            }
+        }
+    }
+
+    fn set_label(&mut self, control: &str, label: Option<&str>) {
+        let Ok(ctl) = parse_control(control) else { return };
+        let action = match label {
+            None | Some("") => None,
+            Some(name) => match Action::parse(name) {
+                Some(a) => Some(a),
+                None => return,
+            },
+        };
+        if self.edit_config(&mut |ed| ed.set_label(ctl, action).map(|_| None)) {
+            self.beep("Tink", false);
+            match action {
+                Some(a) => self.say(format!("{control} is now {}", a.title().to_lowercase())),
+                None => self.say(format!("{control} has no action")),
+            }
         }
     }
 }

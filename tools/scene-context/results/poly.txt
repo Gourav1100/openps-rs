@@ -1,0 +1,8 @@
+4759 frames in 40 recordings (the original ones: 3389 frames); recordings unseen, zero-shot weight 0.25
+
+head                                    alone + zero-shot     F1  orig.  other |    sequences, filter with presses: acc     F1  recall
+logistic regression C=0.1 (shipped)     0.831       0.830  0.815  0.852  0.774 |                                  0.922  0.906  on_foo=0.84 in_veh=0.97 menu=0.95 cutsce=0.75  [56 s]
+PCA 32, degree 2, C=0.1                 0.738       0.754  0.742  0.774  0.705 |                                  0.822  0.756  on_foo=0.74 in_veh=0.86 menu=0.89 cutsce=0.81  [316 s]
+PCA 32, degree 2, C=0.01                0.766       0.782  0.772  0.802  0.732 |                                  0.836  0.794  on_foo=0.72 in_veh=0.89 menu=0.93 cutsce=0.78  [281 s]
+PCA 64, degree 2, C=0.01                0.772       0.779  0.763  0.805  0.716 |                                  0.887  0.889  on_foo=0.83 in_veh=0.92 menu=0.94 cutsce=0.80  [359 s]
+PCA 64, degree 2, C=0.003               0.776       0.783  0.767  0.808  0.719 |                                  0.882  0.881  on_foo=0.81 in_veh=0.92 menu=0.93 cutsce=0.76  [352 s]

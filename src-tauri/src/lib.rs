@@ -215,7 +215,8 @@ fn media_and_events(app: &AppHandle, look: openps_metal::look::SharedLook, setti
     #[cfg(target_os = "macos")]
     {
         if let Some(window) = app.get_webview_window("main") {
-            match video::Video::install(&window, look, video::render_settings(settings)) {
+            let scene = app.try_state::<input::InputState>().map(|s| s.scene_service());
+            match video::Video::install(&window, look, video::render_settings(settings), scene) {
                 Ok(v) => {
                     let v = Arc::new(v);
                     return MediaParts {
@@ -721,6 +722,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             input::input_ui,
             #[cfg(target_os = "macos")]
+            input::scene_model_ready,
+            #[cfg(target_os = "macos")]
             input::input_config_info,
             #[cfg(target_os = "macos")]
             input::input_config_reveal,
@@ -835,7 +838,7 @@ pub fn run() {
             let look = openps_metal::look::SharedLook::new(); // what we told the console the stick does; the renderer reads it
             #[cfg(target_os = "macos")]
             {
-                app.manage(input::InputState::new(&dir, look.clone()));
+                app.manage(input::InputState::new(app.handle(), &dir, look.clone()));
                 app.manage(pads::PadState::new(look.clone()));
             }
             let core = build_core(app.handle(), dir, look).map_err(|e| format!("cannot start: {e}"))?;

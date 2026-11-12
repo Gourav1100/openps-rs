@@ -43,11 +43,14 @@ pub struct VideoCapture {
 
 impl VideoCapture {
     /// A capture in the directory named by `OPENPS_VIDEO_CAPTURE`, if it is set and the file can be created.
+    /// `OPENPS_VIDEO_CAPTURE_SECONDS` and `OPENPS_VIDEO_CAPTURE_MB` raise the default limits for a long recording.
     pub fn from_env() -> Option<Self> {
         let dir = PathBuf::from(std::env::var_os("OPENPS_VIDEO_CAPTURE").filter(|d| !d.is_empty())?);
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let path = dir.join(format!("video-{stamp}.opsvid"));
-        match Self::create(&path, MAX_SECONDS, MAX_BYTES) {
+        let seconds = env_limit("OPENPS_VIDEO_CAPTURE_SECONDS", MAX_SECONDS, 1);
+        let bytes = env_limit("OPENPS_VIDEO_CAPTURE_MB", MAX_BYTES, 1_000_000);
+        match Self::create(&path, seconds, bytes) {
             Ok(c) => {
                 log::info!("capturing video to {}", path.display());
                 Some(c)
@@ -121,6 +124,15 @@ impl Drop for VideoCapture {
     }
 }
 
+/// A positive whole number in the environment variable `name`, times `scale`; the default when unset or invalid.
+fn env_limit(name: &str, default: u64, scale: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .map_or(default, |v| v.saturating_mul(scale))
+}
+
 pub fn read(path: &Path) -> io::Result<Vec<Record>> {
     let mut f = io::BufReader::new(File::open(path)?);
     let mut magic = [0u8; 8];
@@ -161,6 +173,17 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("openps-capture-test-{}-{name}.opsvid", std::process::id()))
+    }
+
+    #[test]
+    fn a_limit_comes_from_the_environment_only_when_it_is_a_positive_number() {
+        std::env::set_var("OPENPS_TEST_LIMIT_OK", " 30 ");
+        std::env::set_var("OPENPS_TEST_LIMIT_ZERO", "0");
+        std::env::set_var("OPENPS_TEST_LIMIT_BAD", "abc");
+        assert_eq!(env_limit("OPENPS_TEST_LIMIT_OK", 90, 1_000), 30_000);
+        assert_eq!(env_limit("OPENPS_TEST_LIMIT_ZERO", 90, 1), 90);
+        assert_eq!(env_limit("OPENPS_TEST_LIMIT_BAD", 90, 1), 90);
+        assert_eq!(env_limit("OPENPS_TEST_LIMIT_UNSET", 90, 1), 90);
     }
 
     #[test]

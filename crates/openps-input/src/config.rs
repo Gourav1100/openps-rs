@@ -1,7 +1,8 @@
 //! Typed configuration (spec 04 section 4). Defaults are embedded; user files layer on top.
 
 use crate::keys::{parse_chord, Chord, Input, Key, MouseInput};
-use crate::state::{parse_control, Control};
+use crate::scene::{Action, Layer};
+use crate::state::{parse_control, Axis, Control};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -114,6 +115,78 @@ pub struct Profile {
     pub description: String,
     pub bindings: BTreeMap<String, Vec<String>>,
     pub combos: Vec<Combo>,
+    pub advanced: Advanced,
+}
+
+/// A profile's advanced mode: while `enabled`, the keys come from the layer the game is in (on foot, in a vehicle, in a menu) instead of
+/// the primary and secondary keys, and PS5 controls can carry an action label for the scene detector. Each profile (the base too) has its own.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Advanced {
+    pub enabled: bool,
+    pub on_foot: BTreeMap<String, Vec<String>>,
+    pub in_vehicle: BTreeMap<String, Vec<String>>,
+    pub in_menu: BTreeMap<String, Vec<String>>,
+    /// PS5 control -> action name (`key_enter_or_exit_vehicle`, ...). A control has at most one; an action can be on many controls.
+    pub labels: BTreeMap<String, String>,
+    /// Layers the game has no use for (`on_foot`, `in_vehicle`, `in_menu`): the key map never switches to them and the scene detector
+    /// never reports their scenes. At least one layer stays on.
+    pub disabled_layers: Vec<String>,
+}
+
+impl Advanced {
+    pub fn layer(&self, layer: Layer) -> &BTreeMap<String, Vec<String>> {
+        match layer {
+            Layer::OnFoot => &self.on_foot,
+            Layer::InVehicle => &self.in_vehicle,
+            Layer::InMenu => &self.in_menu,
+        }
+    }
+
+    pub fn layer_mut(&mut self, layer: Layer) -> &mut BTreeMap<String, Vec<String>> {
+        match layer {
+            Layer::OnFoot => &mut self.on_foot,
+            Layer::InVehicle => &mut self.in_vehicle,
+            Layer::InMenu => &mut self.in_menu,
+        }
+    }
+
+    /// Nothing worth saving: switched off, no keys, no labels.
+    pub fn is_empty(&self) -> bool {
+        *self == Advanced::default()
+    }
+
+    /// The action a control carries.
+    pub fn label_of(&self, control: &str) -> Option<Action> {
+        self.labels.get(control).and_then(|n| Action::parse(n))
+    }
+
+    pub fn layer_enabled(&self, layer: Layer) -> bool {
+        !self.disabled_layers.iter().any(|n| n == layer.name())
+    }
+
+    /// The layers in use, in the order on foot, in a vehicle, in a menu.
+    pub fn enabled_layers(&self) -> Vec<Layer> {
+        Layer::ALL.into_iter().filter(|l| self.layer_enabled(*l)).collect()
+    }
+
+    /// Turn a layer on or off. The last layer in use cannot be turned off (`false` then, nothing changes).
+    pub fn set_layer_enabled(&mut self, layer: Layer, on: bool) -> bool {
+        if !on && self.enabled_layers() == [layer] {
+            return false;
+        }
+        self.disabled_layers.retain(|n| n != layer.name());
+        if !on {
+            self.disabled_layers.push(layer.name().into());
+            self.disabled_layers.sort_by_key(|n| Layer::parse(n).map(|l| l as u8));
+        }
+        true
+    }
+}
+
+/// Only buttons and the two triggers can carry an action: they are what a press is read from.
+pub fn can_carry_action(control: Control) -> bool {
+    matches!(control, Control::Button(_) | Control::Axis(Axis::L2) | Control::Axis(Axis::R2))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -140,6 +213,8 @@ pub struct Config {
     pub bindings: BTreeMap<String, Vec<String>>,
     pub combos: Vec<Combo>,
     pub profiles: IndexMap<String, Profile>,
+    /// The base profile's advanced mode (every other profile has its own in `profiles`).
+    pub advanced: Advanced,
     pub mouse: MouseConfig,
     pub output: OutputConfig,
     pub adaptive_triggers: AdaptiveTriggerConfig,
@@ -173,6 +248,7 @@ impl Default for Config {
             bindings: BTreeMap::new(),
             combos: vec![],
             profiles: IndexMap::new(),
+            advanced: Default::default(),
             mouse: Default::default(),
             output: Default::default(),
             adaptive_triggers: Default::default(),
@@ -323,13 +399,49 @@ impl Config {
         Ok(out)
     }
 
+    /// A profile's advanced mode (the base profile's lives in the top-level `[advanced]`). `None` for a profile that does not exist.
+    pub fn advanced_of(&self, profile: &str) -> Option<&Advanced> {
+        if profile == self.default_name {
+            Some(&self.advanced)
+        } else {
+            self.profiles.get(profile).map(|p| &p.advanced)
+        }
+    }
+
+    /// The profile's bindings: the primary and secondary keys.
     pub fn resolve(&self, profile: Option<&str>) -> Result<Vec<Binding>, String> {
+        self.resolve_map(profile, None)
+    }
+
+    /// The bindings to use while the game is in `layer`: the layer's keys when the profile is in advanced mode, otherwise the same as `resolve`.
+    pub fn resolve_layer(&self, profile: Option<&str>, layer: Layer) -> Result<Vec<Binding>, String> {
+        let name = profile.unwrap_or(&self.default_name);
+        let advanced = self.advanced_of(name).is_some_and(|a| a.enabled);
+        self.resolve_map(profile, advanced.then_some(layer))
+    }
+
+    /// Every set of bindings the profile can ever use (its plain keys and all three layers), for validation.
+    fn all_bindings(&self, profile: &str) -> Result<Vec<Binding>, String> {
+        let mut out = self.resolve_map(Some(profile), None)?;
+        if self.advanced_of(profile).is_some_and(|a| !a.is_empty()) {
+            for layer in Layer::ALL {
+                out.extend(self.resolve_map(Some(profile), Some(layer))?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn resolve_map(&self, profile: Option<&str>, layer: Option<Layer>) -> Result<Vec<Binding>, String> {
         let profile = profile.unwrap_or(&self.default_name);
         if profile != self.default_name && !self.profiles.contains_key(profile) {
             return Err(format!("unknown profile {profile:?}"));
         }
         let mut out = vec![];
-        for (control, chords) in self.profile_bindings(profile) {
+        let map = match (layer, self.advanced_of(profile)) {
+            (Some(l), Some(a)) => a.layer(l).clone(),
+            _ => self.profile_bindings(profile),
+        };
+        for (control, chords) in map {
             let ctl = parse_control(&control)?;
             for c in chords {
                 out.push(Binding { inputs: parse_chord(&c)?, outputs: vec![ctl] });
@@ -417,7 +529,27 @@ impl Config {
             parse_chord(c)?;
         }
         for name in self.profile_names() {
-            self.resolve(Some(&name))?;
+            self.all_bindings(&name)?;
+            let advanced = self.advanced_of(&name).cloned().unwrap_or_default();
+            for (control, action) in &advanced.labels {
+                let ctl = parse_control(control)?;
+                if !can_carry_action(ctl) {
+                    return Err(format!(
+                        "profile {name:?}: {control} cannot carry an action (only buttons and the triggers can)"
+                    ));
+                }
+                if Action::parse(action).is_none() {
+                    return Err(format!("profile {name:?}: unknown action {action:?} on {control}"));
+                }
+            }
+            if let Some(bad) = advanced.disabled_layers.iter().find(|n| Layer::parse(n).is_none()) {
+                return Err(format!(
+                    "profile {name:?}: unknown layer {bad:?} in disabled_layers (on_foot, in_vehicle or in_menu)"
+                ));
+            }
+            if advanced.enabled_layers().is_empty() {
+                return Err(format!("profile {name:?}: disabled_layers cannot switch off every layer"));
+            }
         }
         let keys = self.hotkey_chords()?;
         for (i, (a, ca)) in keys.iter().enumerate() {
@@ -439,7 +571,7 @@ impl Config {
         let reserved = self.reserved_inputs()?;
         let clicks = [Input::Mouse(MouseInput::MOUSE_LEFT), Input::Mouse(MouseInput::MOUSE_RIGHT)];
         for name in self.profile_names() {
-            for b in self.resolve(Some(&name))? {
+            for b in self.all_bindings(&name)? {
                 let outs = b.outputs.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ");
                 if b.inputs.contains(&Input::Key(Key::TAB)) && clicks.iter().any(|c| b.inputs.contains(c)) {
                     return Err(format!("Tab + left/right click toggles RT/RB and LT/LB, so a binding cannot use that combination (binding for {outs} in profile {name:?})"));
@@ -494,6 +626,27 @@ fn snake_keys(t: &mut Table) -> BTreeMap<String, String> {
     map
 }
 
+/// `[advanced]`: each layer table like a bindings table, and `labels` as CONTROL = "key_..." with canonical control names.
+fn normalise_advanced(raw: &Value, where_: &str) -> Result<Value, String> {
+    let t = raw.as_table().ok_or_else(|| format!("[{where_}] must be a table"))?;
+    let mut out = t.clone();
+    for layer in Layer::ALL {
+        if let Some(b) = t.get(layer.name()) {
+            out.insert(layer.name().into(), normalise_bindings(b, &format!("{where_}.{}", layer.name()))?);
+        }
+    }
+    if let Some(l) = t.get("labels") {
+        let lt = l.as_table().ok_or_else(|| format!("[{where_}.labels] must be a table of CONTROL = \"key_...\""))?;
+        let mut labels = Table::new();
+        for (k, v) in lt {
+            let name = v.as_str().ok_or_else(|| format!("{where_}.labels.{k} must be a string"))?;
+            labels.insert(parse_control(k)?.name().to_string(), Value::String(name.to_string()));
+        }
+        out.insert("labels".into(), Value::Table(labels));
+    }
+    Ok(Value::Table(out))
+}
+
 fn normalise(mut data: Table) -> Result<Table, String> {
     // profile names are lowercase snake_case: older files with other spellings are read as the converted names
     let mut renamed = BTreeMap::new();
@@ -521,6 +674,10 @@ fn normalise(mut data: Table) -> Result<Table, String> {
         let n = normalise_bindings(b, "bindings")?;
         data.insert("bindings".into(), n);
     }
+    if let Some(a) = data.get("advanced") {
+        let n = normalise_advanced(a, "advanced")?;
+        data.insert("advanced".into(), n);
+    }
     if let Some(p) = data.get_mut("profiles") {
         let profs = p.as_table_mut().ok_or("[profiles] must be a table of [profiles.<name>] sections")?;
         let names: Vec<String> = profs.keys().cloned().collect();
@@ -530,6 +687,10 @@ fn normalise(mut data: Table) -> Result<Table, String> {
             if let Some(b) = prof.get("bindings") {
                 let n = normalise_bindings(b, &format!("profiles.{name}.bindings"))?;
                 prof.insert("bindings".into(), n);
+            }
+            if let Some(a) = prof.get("advanced") {
+                let n = normalise_advanced(a, &format!("profiles.{name}.advanced"))?;
+                prof.insert("advanced".into(), n);
             }
         }
     }

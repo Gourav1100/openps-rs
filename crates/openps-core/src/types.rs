@@ -182,28 +182,14 @@ pub struct StreamOptions {
     #[serde(default = "default_display_fps")]
     pub display_fps: u16,
     /// Frame generation as a multiple of the stream's rate, in tenths: 10 = off (frames are shown as they arrive), 15 = 1.5x, 20 = 2x,
-    /// 25 = 2.5x, 30 = 3x. The rate presented is the stream's rate times this, never above what the display can show (and it steps down
-    /// when the Mac cannot keep it). 0 = not chosen yet (settings saved before this existed): `display_fps` is used as it was.
+    /// 25 = 2.5x, 30 = 3x. It is the target: the rate presented is the stream's rate times this, never above what the display can show,
+    /// and the adaptive frame rate (always on) steps it down in steps of 5 fps when the Mac cannot keep it up with every filter on.
+    /// 0 = not chosen yet (settings saved before this existed): `migrated` sets it.
     #[serde(default)]
     pub frame_gen: u8,
-    /// Frame generation on or off. Off: frames are shown as they arrive. On: the client makes extra frames to fill the display's refresh
-    /// rate (up to 240), and the adaptive frame rate steps the rate down in steps of 5 fps when the Mac cannot keep it up.
-    #[serde(default = "default_framegen")]
+    /// The on/off switch of version 4, read only by `migrated` (off becomes `frame_gen` 10); it is no longer written or used.
+    #[serde(default = "default_framegen", skip_serializing)]
     pub framegen_on: bool,
-    /// When the Mac cannot keep every filter running at the rate asked for, lower the frame rate gently, in steps of 5 fps (to the closest
-    /// multiple of 5 it can hold, at most 10 at a time, only when the load stays too high for a couple of seconds) and keep the picture as it is, instead of switching filters off. On by default.
-    #[serde(default = "default_true")]
-    pub adaptive_fps: bool,
-    /// Smooth mode's smoothing buffer: the picture is held back by how late the slowest recent frames arrive (at most 25 ms), so a frame
-    /// that comes late is still there in time and the motion does not stall (the 20-30 ms gaps in frame pacing). Costs that much latency
-    /// in Smooth mode; off, the picture is as early as the network's best case allowed. On by default.
-    #[serde(default = "default_true")]
-    pub pacing_buffer: bool,
-    /// Let the renderer make and present frames above the display's refresh rate (frame generation up to 240 on a 60 Hz screen). The
-    /// display shows its newest frame at each refresh, so this lowers latency and drops older pictures; it does not show more of them, and
-    /// can tear in full screen. Costs GPU time (the adaptive frame rate still lowers it when the Mac cannot keep up). Off by default.
-    #[serde(default)]
-    pub uncapped_rate: bool,
     /// Run the MetalFX upscaler in linear light (the FSR engine has no such mode). On by default.
     #[serde(default = "default_true")]
     pub linear_light: bool,
@@ -228,6 +214,10 @@ pub struct StreamOptions {
     /// A file from a build that had the VideoToolbox engine (`videotoolbox`, and the retired `vt_latency`) opens with `metalfx`.
     #[serde(default = "default_engine")]
     pub engine: String,
+    /// Who makes the generated frames in Smooth mode: `builtin` (our interpolator), `metalfx` (Apple's, at every rate) or `dynamic`
+    /// (MetalFX, with the built-in interpolator taking over for a while when the GPU cannot keep up).
+    #[serde(default = "default_interpolator")]
+    pub interpolator: String,
     /// Sharpness in percent (0..=200). With the upscaler: 0 smooth enlargement, 100 as the upscaler draws it, above that sharper. Without it:
     /// 50 leaves the picture alone, above sharpens, below softens.
     #[serde(default = "default_sharpness")]
@@ -257,7 +247,7 @@ pub struct StreamOptions {
 }
 
 /// The settings as this version of the app writes them.
-pub const SETTINGS_VERSION: u8 = 4;
+pub const SETTINGS_VERSION: u8 = 5;
 
 /// The upscaling multiples offered, as the setting writes them and as the factor they stand for ("1.33x" is exactly 4/3, so 1080p
 /// becomes 1440p).
@@ -282,9 +272,8 @@ impl StreamOptions {
 
     /// Settings saved by an older version, brought up to date: the stream always runs at 60 fps (the setting is gone), an old upscaling
     /// cap becomes a multiple, a sharpness that is still the old default of 50 becomes the new default of 60, the retired VideoToolbox
-    /// engine becomes MetalFX, and the old frame-generation multiple (or display rate) becomes the frame-generation switch of version 4
-    /// (the rate itself is automatic now: the display's, lowered by the adaptive frame rate). Once saved the version is current and a
-    /// chosen 50 stays.
+    /// engine becomes MetalFX, and the old frame-generation switch (or display rate) becomes the multiple of version 5: off is 1.0x,
+    /// on keeps a chosen multiple or becomes 2x. Once saved the version is current and a chosen 50 stays.
     pub fn migrated(mut self) -> Self {
         self.fps = 60;
         if self.settings_version < 2 && self.sharpness == 50 {
@@ -302,6 +291,13 @@ impl StreamOptions {
         if self.settings_version < 4 {
             self.framegen_on =
                 matches!(self.frame_gen, 15 | 20 | 25 | 30) || (self.frame_gen == 0 && self.display_fps > 60);
+        }
+        if self.settings_version < 5 {
+            self.frame_gen = match (self.framegen_on, self.frame_gen) {
+                (false, _) => 10,
+                (true, g @ (15 | 20 | 25 | 30)) => g,
+                (true, _) => 20,
+            };
         }
         self.settings_version = SETTINGS_VERSION;
         self
@@ -340,6 +336,9 @@ fn default_sharpness() -> u8 {
     60
 }
 fn default_engine() -> String {
+    "metalfx".into()
+}
+fn default_interpolator() -> String {
     "metalfx".into()
 }
 fn default_camera_comp() -> bool {
@@ -414,6 +413,12 @@ impl StreamOptions {
                 self.frame_mode.chars().take(16).collect::<String>()
             ));
         }
+        if !matches!(self.interpolator.as_str(), "builtin" | "metalfx" | "dynamic") {
+            return Err(format!(
+                "unknown interpolator {:?} (use builtin, metalfx or dynamic)",
+                self.interpolator.chars().take(16).collect::<String>()
+            ));
+        }
         if self.volume > 100 {
             return Err(format!("volume {} is out of range (0 to 100)", self.volume));
         }
@@ -438,9 +443,6 @@ impl Default for StreamOptions {
             display_fps: default_display_fps(),
             frame_gen: 20,
             framegen_on: default_framegen(),
-            adaptive_fps: true,
-            pacing_buffer: true,
-            uncapped_rate: false,
             linear_light: true,
             sharpness_on: true,
             rcas_on: true,
@@ -448,6 +450,7 @@ impl Default for StreamOptions {
             frame_mode: default_frame_mode(),
             camera_comp: default_camera_comp(),
             engine: default_engine(),
+            interpolator: default_interpolator(),
             sharpness: default_sharpness(),
             rcas: default_rcas(),
             saturation: default_saturation(),
@@ -639,7 +642,7 @@ mod tests {
         }
         assert_eq!(
             old.frame_gen, 0,
-            "settings saved before frame generation modes existed keep their display rate until a mode is chosen"
+            "settings saved before frame generation modes existed have none chosen until they are migrated"
         );
         for bad in [
             StreamOptions { upscale: "4k".into(), ..ok.clone() },
@@ -710,55 +713,58 @@ mod tests {
     }
 
     #[test]
-    fn every_filter_has_its_own_switch_and_the_frame_rate_is_automatic() {
+    fn every_filter_has_its_own_switch_and_frame_generation_is_a_multiple() {
         let d = StreamOptions::default();
         assert!(d.linear_light && d.sharpness_on && d.rcas_on && d.saturation_on, "all filters on by default");
-        assert!(d.adaptive_fps, "lowering the frame rate instead of dropping filters is the default");
-        assert!(d.pacing_buffer, "the smoothing buffer is on by default");
-        assert!(!d.uncapped_rate, "rendering above the display's rate is something to choose");
-        assert!(d.framegen_on, "frame generation is on by default; its rate is the display's, no setting for it");
+        assert_eq!(d.frame_gen, 20, "frame generation is 2x by default");
         // a file from before the switches existed has them all on, and keeps its sliders
         let ok = StreamOptions::default();
         let json = serde_json::to_string(&ok).unwrap();
         let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        for k in ["linear_light", "sharpness_on", "rcas_on", "saturation_on", "adaptive_fps"] {
+        for k in ["linear_light", "sharpness_on", "rcas_on", "saturation_on"] {
             v.as_object_mut().unwrap().remove(k);
         }
-        v.as_object_mut().unwrap().remove("pacing_buffer");
-        v.as_object_mut().unwrap().remove("uncapped_rate");
         let old: StreamOptions = serde_json::from_value(v).unwrap();
-        assert!(old.linear_light && old.sharpness_on && old.rcas_on && old.saturation_on && old.adaptive_fps);
-        assert!(
-            old.pacing_buffer && !old.uncapped_rate,
-            "files from before the two options get the buffer and the display's rate"
-        );
-        // a file written while the target-rate slider existed still loads: the key is ignored
+        assert!(old.linear_light && old.sharpness_on && old.rcas_on && old.saturation_on);
+        // the adaptive frame rate, the smoothing buffer and the above-the-display option are no settings any more: the keys are ignored
         let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        v["target_fps"] = serde_json::json!(90);
-        let with_target: StreamOptions = serde_json::from_value(v).unwrap();
-        assert_eq!(with_target, ok, "the retired target_fps key is not an error and changes nothing");
+        for k in ["adaptive_fps", "pacing_buffer", "uncapped_rate", "target_fps"] {
+            v[k] = serde_json::json!(false);
+        }
+        let with_retired: StreamOptions = serde_json::from_value(v).unwrap();
+        assert_eq!(with_retired, ok, "the retired keys are not an error and change nothing");
     }
 
     #[test]
-    fn the_old_frame_generation_multiples_become_the_frame_generation_switch() {
-        let from = |frame_gen: u8, display_fps: u16| {
-            StreamOptions { frame_gen, display_fps, settings_version: 3, ..Default::default() }.migrated()
+    fn the_old_frame_generation_switch_and_multiples_become_one_multiple() {
+        let from = |version: u8, frame_gen: u8, framegen_on: bool, display_fps: u16| {
+            StreamOptions { frame_gen, framegen_on, display_fps, settings_version: version, ..Default::default() }
+                .migrated()
+                .frame_gen
         };
+        // version 3: the multiple was the choice (10 = Off), and a file from before the multiples had only a display rate
         for multiple in [15u8, 20, 25, 30] {
-            assert!(from(multiple, 60).framegen_on, "{multiple} tenths was on");
+            assert_eq!(from(3, multiple, true, 60), multiple);
         }
-        assert!(!from(10, 60).framegen_on, "1.0x was Off");
-        // a file from before the multiples existed had only a display rate
-        assert!(!from(0, 60).framegen_on);
-        assert!(!from(0, 30).framegen_on);
-        assert!(from(0, 144).framegen_on);
-        assert!(from(0, 75).framegen_on);
-        assert!(from(20, 60).validate().is_ok());
+        assert_eq!(from(3, 10, true, 60), 10, "1.0x was Off");
+        assert_eq!(from(3, 0, true, 60), 10);
+        assert_eq!(from(3, 0, true, 30), 10);
+        assert_eq!(from(3, 0, true, 144), 20);
+        assert_eq!(from(3, 0, true, 75), 20);
+        // version 4: a switch that was off is Off, one that was on keeps the multiple that was stored or becomes 2x
+        assert_eq!(from(4, 30, false, 60), 10);
+        assert_eq!(from(4, 30, true, 60), 30);
+        assert_eq!(from(4, 0, true, 60), 20);
+        assert_eq!(from(4, 10, true, 60), 20);
+        assert!(StreamOptions { frame_gen: from(3, 20, true, 60), ..Default::default() }.validate().is_ok());
         // a file already at this version is not touched again
-        let chosen = StreamOptions { framegen_on: false, frame_gen: 20, ..Default::default() };
+        let chosen = StreamOptions { frame_gen: 25, ..Default::default() };
         let m = chosen.clone().migrated();
-        assert!(!m.framegen_on);
+        assert_eq!(m.frame_gen, 25);
         assert_eq!(m.clone().migrated(), m, "migrating twice changes nothing");
+        // the switch is read from an old file but never written again
+        let v = serde_json::to_value(&m).unwrap();
+        assert!(v.get("framegen_on").is_none());
     }
 
     #[test]

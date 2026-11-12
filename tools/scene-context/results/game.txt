@@ -1,0 +1,28 @@
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S1 zero-shot: macro-F1 0.63 acc 0.63 | on_foo=0.70 land_v=0.98 water_=0.71 menu_o=0.42 (n=352)
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S1 probe: macro-F1 0.61 acc 0.56 | on_foo=0.23 land_v=0.81 water_=0.57 menu_o=0.90 (n=352)
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S1 zero-shot+probe: macro-F1 0.67 acc 0.64 | on_foo=0.42 land_v=0.98 water_=0.71 menu_o=0.82 (n=352)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 1.00, right vehicle type 0.94; false vehicle on on-foot 0.09, on menu/cutscene 0.05
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S1 zero-shot: macro-F1 0.50 acc 0.52 | on_foo=0.49 land_v=0.98 air_ve=0.97 water_=0.75 menu_o=0.10 (n=1639)
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S1 probe: macro-F1 0.59 acc 0.61 | on_foo=0.72 land_v=0.90 air_ve=0.98 water_=0.50 menu_o=0.12 (n=1639)
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S1 zero-shot+probe: macro-F1 0.59 acc 0.57 | on_foo=0.61 land_v=0.97 air_ve=0.98 water_=0.83 menu_o=0.09 (n=1639)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 0.98, right vehicle type 0.97; false vehicle on on-foot 0.38, on menu/cutscene 0.12
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S1 zero-shot: macro-F1 0.50 acc 0.52 | on_foo=0.49 land_v=0.98 air_ve=0.97 water_=0.75 menu_o=0.10 (n=1639)
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S1 probe: macro-F1 0.74 acc 0.75 | on_foo=0.73 land_v=0.93 air_ve=0.98 water_=0.58 menu_o=0.61 (n=1639)
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S1 zero-shot+probe: macro-F1 0.67 acc 0.65 | on_foo=0.60 land_v=0.98 air_ve=0.95 water_=0.75 menu_o=0.41 (n=1639)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 0.98, right vehicle type 0.97; false vehicle on on-foot 0.38, on menu/cutscene 0.09
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S2 zero-shot: macro-F1 0.66 acc 0.64 | on_foo=0.77 land_v=0.98 water_=0.86 menu_o=0.35 (n=352)
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S2 probe: macro-F1 0.62 acc 0.57 | on_foo=0.40 land_v=0.74 water_=0.43 menu_o=0.74 (n=352)
+OTHER GAME  train all GTA -> test Watch Dogs | MobileCLIP-S2 zero-shot+probe: macro-F1 0.72 acc 0.68 | on_foo=0.59 land_v=0.90 water_=0.86 menu_o=0.71 (n=352)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 0.94, right vehicle type 0.90; false vehicle on on-foot 0.06, on menu/cutscene 0.08
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S2 zero-shot: macro-F1 0.54 acc 0.53 | on_foo=0.50 land_v=0.99 air_ve=0.97 water_=0.83 menu_o=0.12 (n=1639)
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S2 probe: macro-F1 0.56 acc 0.58 | on_foo=0.63 land_v=0.88 air_ve=0.97 water_=0.58 menu_o=0.20 (n=1639)
+OTHER SOURCE train PS captures -> test GTA mp4 | MobileCLIP-S2 zero-shot+probe: macro-F1 0.60 acc 0.58 | on_foo=0.59 land_v=0.98 air_ve=0.97 water_=0.83 menu_o=0.15 (n=1639)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 0.98, right vehicle type 0.97; false vehicle on on-foot 0.38, on menu/cutscene 0.10
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S2 zero-shot: macro-F1 0.54 acc 0.53 | on_foo=0.50 land_v=0.99 air_ve=0.97 water_=0.83 menu_o=0.12 (n=1639)
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S2 probe: macro-F1 0.68 acc 0.69 | on_foo=0.67 land_v=0.91 air_ve=0.93 water_=0.67 menu_o=0.48 (n=1639)
+OTHER SOURCE train PS captures + Watch Dogs -> test GTA mp4 | MobileCLIP-S2 zero-shot+probe: macro-F1 0.63 acc 0.62 | on_foo=0.61 land_v=0.98 air_ve=0.95 water_=0.75 menu_o=0.28 (n=1639)
+   switching view of zero-shot+probe: vehicle frames detected as some vehicle 0.99, right vehicle type 0.97; false vehicle on on-foot 0.37, on menu/cutscene 0.09
+VIEW train PS captures -> GTA mp4 | MobileCLIP-S1: macro-F1 0.79 first=0.62 third=0.97 (first n=579, third n=612)
+VIEW train everything else -> the 3 view videos | MobileCLIP-S1: macro-F1 0.89 first=0.85 third=0.99 (first n=500, third n=249)
+VIEW train PS captures -> GTA mp4 | MobileCLIP-S2: macro-F1 0.78 first=0.59 third=0.98 (first n=579, third n=612)
+VIEW train everything else -> the 3 view videos | MobileCLIP-S2: macro-F1 0.86 first=0.80 third=0.99 (first n=500, third n=249)

@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenPS dataset labeler</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --card: 260px;
+      }
+      body {
+        margin: 0;
+        font:
+          14px -apple-system,
+          system-ui,
+          sans-serif;
+        background: #15161a;
+        color: #e6e6e6;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #1d1f25;
+        padding: 6px 12px;
+        border-bottom: 1px solid #333;
+      }
+      .keys {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 12px;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .keys span b {
+        display: inline-block;
+        min-width: 16px;
+        text-align: center;
+        padding: 0 5px;
+        border-radius: 4px;
+        background: #333;
+        margin-right: 4px;
+      }
+      .bar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .bar select,
+      .bar input[type="range"] {
+        vertical-align: middle;
+      }
+      button {
+        background: #2f6feb;
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      button.plain {
+        background: #333;
+      }
+      #saved {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: #26402c;
+      }
+      #saved.pending {
+        background: #4a4320;
+      }
+      #saved.bad {
+        background: #7a2222;
+      }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(var(--card), 1fr));
+        gap: 4px;
+        padding: 8px;
+      }
+      #empty {
+        padding: 40px;
+        text-align: center;
+        color: #9aa;
+      }
+      .card {
+        position: relative;
+        border: 2px solid transparent;
+        border-radius: 5px;
+        background: #000;
+        cursor: pointer;
+        user-select: none;
+        aspect-ratio: 16 / 9;
+      }
+      .card[hidden] {
+        display: none;
+      }
+      .card img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        border-radius: 3px;
+      }
+      .card.sel {
+        border-color: #ffd23f;
+      }
+      .card.noview {
+        border-color: #7a4;
+      }
+      .card.noview.sel {
+        border-color: #ffd23f;
+      }
+      .card.del img {
+        opacity: 0.25;
+      }
+      .card .t {
+        position: absolute;
+        left: 4px;
+        top: 4px;
+        background: #000a;
+        padding: 0 5px;
+        font-size: 11px;
+      }
+      .card .tag {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 2px 5px;
+        font-size: 11px;
+        background: #000a;
+      }
+      .card[data-ctx="on_foot"] .tag {
+        background: #1f8a3a;
+      }
+      .card[data-ctx="in_vehicle"] .tag {
+        background: #1f5fd1;
+      }
+      .card[data-ctx="menu"] .tag {
+        background: #b8860b;
+      }
+      .card[data-ctx="cutscene"] .tag {
+        background: #b03a7a;
+      }
+      .card[data-ctx="game_2d"] .tag {
+        background: #4f6b78;
+      }
+      .card[data-ctx="game_3d"] .tag {
+        background: #3a6f9a;
+      }
+      .card[data-ctx="in_game"] .tag {
+        background: #8a6f3a;
+      }
+      .card[data-ctx="menu_or_cutscene"] .tag {
+        background: #666;
+      }
+      .card.del .tag {
+        background: #7a2222;
+      }
+      #box {
+        position: fixed;
+        inset: 0;
+        z-index: 5;
+        background: #000e;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      #box[hidden] {
+        display: none;
+      }
+      #box img {
+        width: 94vw;
+        height: 84vh;
+        object-fit: contain;
+      }
+      #box .cap {
+        font-size: 13px;
+        color: #cdd;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="bar">
+        <button id="prev" class="plain" title="P or [">&#9664; set</button>
+        <select id="sets"></select>
+        <button id="next" class="plain" title="N or ]">set &#9654;</button>
+        <span id="count"></span>
+        <label
+          >show
+          <select id="show">
+            <option value="all">all frames</option>
+            <option value="ctx">no context yet</option>
+            <option value="view">on foot / vehicle, no view yet</option>
+            <option value="any">context missing or view missing</option>
+            <option value="deleted">deleted</option>
+          </select></label
+        >
+        <label
+          >size <input type="range" id="size" min="120" max="600" step="10"
+        /></label>
+        <button id="all" class="plain">Select shown (A)</button>
+        <span id="saved">saved</span>
+        <button id="export" class="plain" title="a file, if the server stopped">
+          Export
+        </button>
+      </div>
+      <div class="keys">
+        <span><b>1</b>on_foot</span><span><b>2</b>in_vehicle</span
+        ><span><b>3</b>menu</span><span><b>4</b>cutscene</span
+        ><span><b>5</b>game_2d (a game that is not 3D)</span
+        ><span
+          ><b>6</b>game_3d (3D game: talking, buying, other interactions)</span
+        ><span><b>0</b>clear both</span><span><b>F</b>first person</span
+        ><span><b>T</b>third person</span><span><b>V</b>clear view</span
+        ><span><b>Del</b>delete / restore</span><span><b>A</b>select shown</span
+        ><span><b>S</b>all frames / unlabeled</span
+        ><span
+          ><b>Shift</b>+<b>1</b>-<b>6</b>show only that label
+          (<b>Shift</b>+<b>0</b>: all)</span
+        ><span><b>N</b>/<b>P</b>next / previous set</span
+        ><span><b>2&times;click</b>large view (arrows, Esc)</span>
+        <span
+          >click = select, shift+click = range, cmd+click = add. Green border =
+          on foot or in a vehicle with no view yet. Every change is saved as you
+          go.</span
+        >
+      </div>
+    </header>
+    <div id="grid"></div>
+    <div id="empty" hidden>
+      Nothing to show in this set with this filter. Press N for the next set, or
+      choose "all frames" under show to revisit what is labeled.
+    </div>
+    <div id="box" hidden>
+      <img alt="" />
+      <div class="cap"></div>
+    </div>
+    <script>
+      const DATA = __DATA__;
+      const TOKEN = __TOKEN__;
+      const CTX = {
+        1: "on_foot",
+        2: "in_vehicle",
+        3: "menu",
+        4: "cutscene",
+        5: "game_2d",
+        6: "game_3d",
+      };
+      const VIEW = { f: "first_person", t: "third_person" };
+      const items = DATA.items;
+      const labels = items.map((it) => ({
+        ctx: it.context,
+        view: it.view,
+        del: false,
+      }));
+
+      // sets: the frames of one recording (or of one suggestion list), one set on the page at a time; a set shows under the recording's short id
+      const sets = [];
+      const setOf = [];
+      items.forEach((it, i) => {
+        if (!sets.length || sets[sets.length - 1].name !== it.set)
+          sets.push({
+            name: it.set,
+            label: it.set === it.session ? it.rid : it.set,
+            title: it.set === it.session ? it.rname : it.set,
+            idx: [],
+          });
+        sets[sets.length - 1].idx.push(i);
+        setOf.push(sets.length - 1);
+      });
+
+      const $ = (id) => document.getElementById(id);
+      const grid = $("grid"),
+        showSel = $("show"),
+        sizeInput = $("size"),
+        setsSel = $("sets");
+      const fmt = (s) =>
+        `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+      const tagText = (l) =>
+        l.del
+          ? "deleted"
+          : [l.ctx, l.view && l.view.replace("_", " ")]
+              .filter(Boolean)
+              .join(" / ") || "unlabeled";
+
+      const UI = "openps-labeler-ui";
+      let ui = {};
+      try {
+        ui = JSON.parse(localStorage.getItem(UI)) || {};
+      } catch (e) {}
+      const saveUi = () => {
+        try {
+          localStorage.setItem(
+            UI,
+            JSON.stringify({ show: showSel.value, size: sizeInput.value }),
+          );
+        } catch (e) {}
+      };
+      // a filter for each label, named by its key (Shift+key picks it); in_game has no key, it is only to be remapped
+      for (const [k, name] of [...Object.entries(CTX), ["", "in_game"]])
+        showSel.add(
+          new Option(
+            k ? `only ${k}: ${name}` : "only in_game (2D or 3D?)",
+            "is:" + name,
+          ),
+          showSel.querySelector('option[value="deleted"]'),
+        );
+      // while frames are unlabeled the page starts on those; "all frames" shows a finished set again
+      const todo = labels.filter((l) => !l.ctx).length;
+      showSel.value = ui.show || (todo > 0 ? "ctx" : "all");
+      if (!showSel.value) showSel.value = "all"; // a filter an older page saved that no longer exists
+      sizeInput.value = ui.size || 260;
+      const setSize = () =>
+        document.documentElement.style.setProperty(
+          "--card",
+          sizeInput.value + "px",
+        );
+      setSize();
+
+      // labeled frames leave the page, so the next ones move up under the cursor
+      // only these are asked for a camera view (menus, cutscenes, game_2d and game_3d are not)
+      const HAS_VIEW = new Set(["on_foot", "in_vehicle"]);
+      const needsView = (l) => HAS_VIEW.has(l.ctx) && !l.view;
+      const done = {
+        all: () => false,
+        ctx: (l) => !!l.ctx,
+        view: (l) => !needsView(l),
+        any: (l) => !!l.ctx && !needsView(l),
+      };
+      const hides = (l) =>
+        showSel.value === "deleted"
+          ? !l.del
+          : showSel.value.startsWith("is:")
+            ? l.del || l.ctx !== showSel.value.slice(3)
+            : l.del || done[showSel.value](l);
+
+      let cur = Math.max(
+        0,
+        sets.findIndex((s) => s.idx.some((i) => !labels[i].ctx)),
+      ); // -1 is every set at once
+      const ALL_IDX = items.map((_, i) => i);
+      const idxOf = () => (cur < 0 ? ALL_IDX : sets[cur].idx);
+      let selected = new Set();
+      let anchor = 0;
+      let cardOf = new Map();
+      let boxAt = null;
+
+      // every set at once is too many cards to build in one go: they come in chunks as the page is scrolled
+      const CHUNK = 500;
+      let pending = [];
+      const more = document.createElement("div");
+      more.style.cssText = "grid-column: 1 / -1; height: 1px";
+      const io = new IntersectionObserver(
+        (e) => {
+          if (e[0].isIntersecting && pending.length) {
+            addChunk();
+            paint();
+          }
+        },
+        { rootMargin: "1500px" },
+      );
+      io.observe(more);
+      const caption = (i) =>
+        cur < 0 || items[i].set !== items[i].session
+          ? `${items[i].rid} ${fmt(items[i].t)}`
+          : fmt(items[i].t);
+      function addChunk() {
+        for (const i of pending.splice(0, cur < 0 ? CHUNK : pending.length)) {
+          const c = document.createElement("div");
+          c.className = "card";
+          c.dataset.i = i;
+          c.innerHTML = `<img loading="lazy" src="${items[i].src}" alt=""><span class="t">${caption(i)}</span><span class="tag"></span>`;
+          grid.appendChild(c);
+          cardOf.set(i, c);
+        }
+        grid.appendChild(more);
+        io.unobserve(more);
+        io.observe(more);
+      }
+
+      function render() {
+        grid.textContent = "";
+        cardOf = new Map();
+        pending =
+          cur < 0
+            ? ALL_IDX.filter((i) => !hides(labels[i]))
+            : [...sets[cur].idx];
+        addChunk();
+        setsSel.value = cur;
+        paint();
+        const first = visible()[0];
+        selected = new Set(first === undefined ? [] : [first]);
+        anchor = first ?? 0;
+        paint();
+        window.scrollTo(0, 0);
+      }
+
+      const visible = () =>
+        idxOf().filter((i) => cardOf.has(i) && !cardOf.get(i).hidden);
+
+      function paint() {
+        let shown = 0;
+        for (const i of idxOf()) {
+          const l = labels[i],
+            hide = hides(l) && !selected.has(i),
+            c = cardOf.get(i);
+          if (!hide) shown++;
+          if (!c) continue;
+          c.dataset.ctx = l.ctx || "";
+          c.classList.toggle("sel", selected.has(i));
+          c.classList.toggle("noview", needsView(l) && !l.del);
+          c.classList.toggle("del", l.del);
+          c.hidden = hide;
+          c.querySelector(".tag").textContent = tagText(l);
+        }
+        $("empty").hidden = shown > 0;
+        // progress of every set and of the whole page
+        const per = sets.map(() => [0, 0]);
+        let withCtx = 0,
+          total = 0;
+        labels.forEach((l, i) => {
+          if (l.del) return;
+          total++;
+          per[setOf[i]][1]++;
+          if (l.ctx) {
+            withCtx++;
+            per[setOf[i]][0]++;
+          }
+        });
+        sets.forEach((s, k) => {
+          setsSel.options[k + 1].textContent =
+            `${s.label}  (${per[k][0]}/${per[k][1]})`;
+        });
+        setsSel.options[0].textContent = `all sets  (${withCtx}/${total})`;
+        $("count").textContent =
+          `${withCtx}/${total} labeled, ${shown} shown in ${cur < 0 ? "all sets" : "this set"}`;
+        if (boxAt !== null)
+          showBox(selected.size === 1 ? [...selected][0] : boxAt);
+      }
+
+      setsSel.add(new Option("all sets", -1));
+      sets.forEach((s, k) => {
+        const o = new Option(s.label, k);
+        o.title = s.title; // the recording's name, for whoever needs it
+        setsSel.add(o);
+      });
+
+      function go(d) {
+        if (cur < 0 && d < 0) return;
+        const next = Math.min(sets.length - 1, Math.max(0, cur + d));
+        if (next === cur) return;
+        cur = next;
+        render();
+      }
+      setsSel.onchange = () => {
+        cur = +setsSel.value;
+        render();
+        setsSel.blur();
+      };
+      $("prev").onclick = () => go(-1);
+      $("next").onclick = () => go(1);
+
+      // ---- saving: every change goes to the server, which writes dataset/labels.json
+      const dirty = new Set();
+      const change = (i) => ({
+        key: items[i].key,
+        context: labels[i].ctx || null,
+        view: labels[i].view || null,
+        deleted: labels[i].del,
+      });
+      let timer = null,
+        inflight = false;
+      function status(text, cls) {
+        const s = $("saved");
+        s.textContent = text;
+        s.className = cls || "";
+      }
+      function queue(i) {
+        dirty.add(i);
+        status(`${dirty.size} unsaved`, "pending");
+        clearTimeout(timer);
+        timer = setTimeout(flush, 400);
+      }
+      async function flush() {
+        if (inflight || !dirty.size) return;
+        inflight = true;
+        const sent = new Map(
+          [...dirty].map((i) => [i, JSON.stringify(change(i))]),
+        );
+        try {
+          const r = await fetch("/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+            body: JSON.stringify({
+              changes: [...sent.keys()].map(change),
+            }),
+          });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          // a frame changed again while this went out stays unsaved
+          sent.forEach((was, i) => {
+            if (JSON.stringify(change(i)) === was) dirty.delete(i);
+          });
+          inflight = false;
+          if (dirty.size) return flush();
+          status("saved " + new Date().toLocaleTimeString());
+        } catch (e) {
+          inflight = false;
+          status("NOT SAVED (" + e.message + "), retrying", "bad");
+          clearTimeout(timer);
+          timer = setTimeout(flush, 3000);
+        }
+      }
+      window.addEventListener("beforeunload", (e) => {
+        if (dirty.size) {
+          flush();
+          e.preventDefault();
+          e.returnValue = "";
+        }
+      });
+      document.addEventListener("visibilitychange", flush);
+
+      // ---- selecting and labeling
+      grid.addEventListener("click", (e) => {
+        const card = e.target.closest(".card");
+        if (!card) return;
+        const i = +card.dataset.i;
+        if (e.shiftKey) {
+          const v = visible(),
+            a = v.indexOf(anchor),
+            b = v.indexOf(i);
+          if (a >= 0 && b >= 0)
+            selected = new Set(v.slice(Math.min(a, b), Math.max(a, b) + 1));
+        } else if (e.metaKey || e.ctrlKey) {
+          selected.has(i) ? selected.delete(i) : selected.add(i);
+          anchor = i;
+        } else {
+          selected = new Set([i]);
+          anchor = i;
+        }
+        paint();
+      });
+      grid.addEventListener("dblclick", (e) => {
+        const card = e.target.closest(".card");
+        if (!card) return;
+        const i = +card.dataset.i;
+        selected = new Set([i]);
+        anchor = i;
+        paint();
+        showBox(i);
+      });
+
+      function apply(patch, advance = true) {
+        if (!selected.size) return;
+        if (
+          selected.size > 1000 &&
+          !confirm(`Change ${selected.size} frames at once?`)
+        )
+          return;
+        const last = Math.max(...selected);
+        selected.forEach((i) => {
+          labels[i] = { ...labels[i], ...patch };
+          queue(i);
+        });
+        selected = new Set();
+        paint();
+        if (advance) {
+          let next = visible().find((i) => i > last);
+          if (next === undefined && pending.length) {
+            addChunk();
+            paint();
+            next = visible().find((i) => i > last);
+          }
+          if (next !== undefined) {
+            selected = new Set([next]);
+            anchor = next;
+            paint();
+            cardOf.get(next).scrollIntoView({ block: "nearest" });
+          }
+        }
+      }
+      const label = (patch, advance) =>
+        apply({ ...patch, del: false }, advance);
+      function remove() {
+        const restore = [...selected].every((i) => labels[i].del);
+        apply({ del: !restore });
+      }
+
+      function selectShown() {
+        // every frame the filter lists, also those not built yet in the all-sets view
+        selected = new Set(idxOf().filter((i) => !hides(labels[i])));
+        anchor = [...selected][0] ?? anchor;
+        paint();
+      }
+      $("all").onclick = selectShown;
+
+      // ---- the large view
+      const box = $("box");
+      function showBox(i) {
+        boxAt = i;
+        const it = items[i];
+        box.querySelector("img").src = it.src;
+        box.querySelector(".cap").textContent =
+          `${it.key}  ${fmt(it.t)}  |  ${tagText(labels[i])}  |  1-6 label, F/T view, Del delete, arrows move, Esc closes`;
+        box.hidden = false;
+      }
+      function hideBox() {
+        boxAt = null;
+        box.hidden = true;
+      }
+      box.onclick = hideBox;
+      function stepBox(d) {
+        const v = visible(),
+          next = v[v.indexOf(boxAt) + d];
+        if (next === undefined) return;
+        selected = new Set([next]);
+        anchor = next;
+        paint();
+        cardOf.get(next).scrollIntoView({ block: "nearest" });
+      }
+
+      document.addEventListener("keydown", (e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.target.closest("select, input")) return;
+        const digit = /^Digit([0-9])$/.exec(e.code);
+        if (e.shiftKey && digit && (digit[1] === "0" || CTX[digit[1]])) {
+          e.preventDefault();
+          showSel.value = digit[1] === "0" ? "all" : "is:" + CTX[digit[1]];
+          return refilter();
+        }
+        const k = e.key.toLowerCase();
+        if (boxAt !== null && (k === "escape" || k === " ")) {
+          e.preventDefault();
+          return hideBox();
+        }
+        if (boxAt !== null && (k === "arrowright" || k === "arrowleft")) {
+          e.preventDefault();
+          return stepBox(k === "arrowright" ? 1 : -1);
+        }
+        if (CTX[k]) label({ ctx: CTX[k] });
+        else if (VIEW[k]) label({ view: VIEW[k] });
+        else if (k === "v") label({ view: null }, false);
+        else if (k === "0") label({ ctx: null, view: null }, false);
+        else if (k === "delete" || k === "backspace") {
+          e.preventDefault();
+          remove();
+        } else if (k === "a") selectShown();
+        else if (k === "s") {
+          showSel.value = showSel.value === "all" ? "ctx" : "all";
+          refilter();
+        } else if (k === "n" || k === "]") go(1);
+        else if (k === "p" || k === "[") go(-1);
+      });
+
+      sizeInput.oninput = () => {
+        setSize();
+        saveUi();
+      };
+      sizeInput.onchange = () => sizeInput.blur();
+      // frames the new filter hides are no longer selected
+      function refilter() {
+        saveUi();
+        selected = new Set([...selected].filter((i) => !hides(labels[i])));
+        if (cur < 0) return render(); // only the frames the filter lists are built
+        const first = sets[cur].idx.find((i) => !hides(labels[i]));
+        if (!selected.size && first !== undefined) {
+          selected = new Set([first]);
+          anchor = first;
+        }
+        paint();
+      }
+      showSel.onchange = () => {
+        refilter();
+        showSel.blur();
+      };
+
+      $("export").onclick = () => {
+        const out = items.map((it, i) => ({
+          key: it.key,
+          session: it.session,
+          file: it.file,
+          t: it.t,
+          ...change(i),
+        }));
+        const blob = new Blob(
+          [JSON.stringify({ build: DATA.build, items: out }, null, 1)],
+          { type: "application/json" },
+        );
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `labels-dataset-${DATA.build}.json`;
+        a.click();
+      };
+      render();
+    </script>
+  </body>
+</html>

@@ -118,6 +118,7 @@ fn a_settings_storm_while_streaming_neither_deadlocks_nor_errors() {
                 mode: if n.is_multiple_of(2) { FrameMode::Smooth } else { FrameMode::ZeroLatency },
                 camera: n.is_multiple_of(3),
                 metalfx: n.is_multiple_of(4),
+                fx_fallback: n.is_multiple_of(8),
                 fsr: n.is_multiple_of(3),
                 linear_light: n.is_multiple_of(2),
                 adaptive: n.is_multiple_of(5),

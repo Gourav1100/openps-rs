@@ -1,0 +1,10 @@
+4759 frames in 40 recordings (the original ones: 3389 frames); recordings unseen, zero-shot weight 0.25
+
+head                                    alone + zero-shot     F1  orig.  other |    sequences, filter with presses: acc     F1  recall
+logistic regression C=0.1 (shipped)     0.831       0.830  0.815  0.852  0.774 |                                  0.922  0.906  on_foo=0.84 in_veh=0.97 menu=0.95 cutsce=0.75  [54 s]
+logistic regression C=0.03              0.835       0.829  0.815  0.852  0.773 |                                  0.921  0.905  on_foo=0.84 in_veh=0.97 menu=0.96 cutsce=0.74  [69 s]
+linear SVM C=0.001                      0.773       0.764  0.702  0.780  0.723 |                                  0.888  0.773  on_foo=0.82 in_veh=0.95 menu=0.92 cutsce=0.25  [249 s]
+linear SVM C=0.003                      0.768       0.763  0.699  0.781  0.718 |                                  0.887  0.765  on_foo=0.82 in_veh=0.95 menu=0.90 cutsce=0.24  [280 s]
+linear SVM C=0.01                       0.761       0.758  0.691  0.779  0.704 |                                  0.889  0.760  on_foo=0.82 in_veh=0.96 menu=0.90 cutsce=0.22  [378 s]
+neural net 256 hidden, dropout 0.3      0.828       0.823  0.812  0.843  0.774 |                                  0.904  0.900  on_foo=0.77 in_veh=0.98 menu=0.96 cutsce=0.79  [61 s]
+neural net 64 hidden, dropout 0.5       0.837       0.829  0.820  0.849  0.780 |                                  0.905  0.889  on_foo=0.78 in_veh=0.98 menu=0.96 cutsce=0.74  [44 s]

@@ -1,0 +1,5 @@
+# What the archived experiments need on top of ../requirements.txt. They are frozen to the first ten recordings (see fuse.py here and
+# ../results/*.txt) and are not run by anything.
+ultralytics
+# vlm.py, vlm_stack.py and vlm_replay.py ran in a separate environment, because mlx-vlm needs numpy 2: mlx-vlm, pillow, scikit-learn, torch,
+# torchvision, timm, transformers

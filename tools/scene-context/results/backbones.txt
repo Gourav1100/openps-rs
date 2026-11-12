@@ -1,0 +1,17 @@
+Which picture and which backbone (experiments/views.py, jepa.py, pairs.py). Same probe and splits as compare.py; 3,297 frames, 10 recordings.
+"unseen" = leave one recording out; "blocks" = held-out blocks of the same recordings. Speeds are PyTorch fp32 on the M4 GPU, batch 1.
+
+picture / model                                  unseen acc / F1 / view     blocks acc / F1     per frame
+MobileCLIP-S1 middle square (shipped)            0.702 / 0.692 / 0.872      0.864 / 0.842        ~5 ms (Core ML)
+MobileCLIP-S1 whole frame squashed to square     0.733 / 0.713 / 0.803      0.893 / 0.868        ~5 ms
+MobileCLIP-S1 whole frame 16:9 (256x448)         0.736 / 0.713 / 0.821      -                    ~9 ms
+MobileCLIP-S1 left+middle+right, concatenated    0.735 / 0.729 / 0.855      -                    ~15 ms
+DINOv2-S/14 center / full                        0.689 / 0.707              0.851 / 0.863        12 / 19 ms
+DINOv2-B/14 center / full                        0.753 / 0.755              0.875 / 0.902        26 / 41 ms
+DINOv3-S/16 center / full                        0.677 / 0.694              0.842 / 0.858        13 / 14 ms
+I-JEPA H/14 center / full                        0.706 / 0.706              0.862 / 0.864        131 / 233 ms
+V-JEPA 2 L/16 center (frame given twice)         0.778 / 0.755 / 0.884      0.878 / 0.850        112 ms
+SigLIP2-B/16 center                              0.743 / 0.733 / 0.871      0.870 / 0.855        21 ms
+V-JEPA2 L + MobileCLIP-S1 squashed               0.804 / 0.767 / 0.851      0.910 / 0.888
+DINOv2-B full + MobileCLIP-S1 squashed           0.797 / 0.763 / 0.872      0.915 / 0.898
+SigLIP2-B center + MobileCLIP-S1 squashed        0.775 / 0.757 / 0.848      0.911 / 0.895

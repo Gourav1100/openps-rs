@@ -1,0 +1,45 @@
+{
+ "2103": {
+  "order": 7
+ },
+ "2c72": {
+  "order": 0,
+  "sequence": true
+ },
+ "36a3": {
+  "order": 9
+ },
+ "3d2c": {
+  "order": 6
+ },
+ "45fe": {
+  "order": 8
+ },
+ "4b3c": {
+  "order": 5
+ },
+ "530c": {
+  "order": 2,
+  "sequence": true
+ },
+ "7132": {
+  "order": 1,
+  "sequence": true,
+  "thin": [
+   333,
+   10
+  ]
+ },
+ "75e8": {
+  "order": 3,
+  "sequence": true
+ },
+ "e0a9": {
+  "order": 4,
+  "sequence": true
+ },
+ "fcc8": {
+  "order": 10,
+  "sequence": true
+ }
+}

@@ -1,0 +1,23 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[KDownloading https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-cls.pt to 'yolo11n-cls.pt': 100% ━━━━━━━━━━━━ 5.5MB 90.0MB/s 0.1s
+3297 frames; device mps
+
+A whole recording unseen (leave-one-set-out)
+  model                         acc    F1  view   recall on_foot / vehicle / menu / cutscene
+  MobileNetV3-L               0.675 0.677 0.796   0.66 / 0.71 / 0.77 / 0.61
+  EfficientNet-Lite0          0.646 0.644 0.788   0.60 / 0.71 / 0.71 / 0.59
+  YOLO11n-cls                 0.650 0.640 0.769   0.61 / 0.71 / 0.65 / 0.58
+  MobileCLIP-S1 (reference)   0.703 0.693 0.872   0.63 / 0.77 / 0.76 / 0.68
+
+Same recordings, held-out blocks of frames
+  model                         acc    F1  view   recall on_foot / vehicle / menu / cutscene
+  MobileNetV3-L               0.821 0.805 0.916   0.81 / 0.86 / 0.80 / 0.75
+  EfficientNet-Lite0          0.816 0.803 0.932   0.80 / 0.86 / 0.82 / 0.74
+  YOLO11n-cls                 0.823 0.801 0.912   0.82 / 0.85 / 0.82 / 0.75
+  MobileCLIP-S1 (reference)   0.865 0.842 0.965   0.84 / 0.92 / 0.87 / 0.78
+
+Size and speed (PyTorch on this GPU, batch 1, 224 px)
+  MobileNetV3-L                 4.2 M params   1280 numbers  6.3 ms
+  EfficientNet-Lite0            3.4 M params   1280 numbers  7.3 ms
+  YOLO11n-cls                   2.8 M params   1280 numbers  4.8 ms
+  MobileCLIP-S1 (reference)    21.5 M params    512 numbers  

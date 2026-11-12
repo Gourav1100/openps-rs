@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenPS frame labeler</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px -apple-system, system-ui, sans-serif; background: #15161a; color: #e6e6e6; }
+  header { position: sticky; top: 0; z-index: 2; background: #1d1f25; padding: 10px 14px; border-bottom: 1px solid #333; }
+  header h1 { font-size: 15px; margin: 0 0 6px; }
+  .keys { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .keys span b { display: inline-block; min-width: 16px; text-align: center; padding: 0 5px; border-radius: 4px; background: #333; margin-right: 4px; }
+  .bar { margin-top: 8px; display: flex; gap: 10px; align-items: center; }
+  button { background: #2f6feb; color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.plain { background: #333; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; padding: 12px; }
+  .card { position: relative; border: 3px solid transparent; border-radius: 6px; background: #000; cursor: pointer; user-select: none; }
+  .card img { width: 100%; display: block; border-radius: 3px; }
+  .card.sel { border-color: #ffd23f; }
+  .card .t { position: absolute; left: 4px; top: 4px; background: #000a; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .card .tag { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 6px; font-size: 12px; background: #000a; }
+  .card[data-ctx="on_foot"] .tag { background: #1f8a3a; }
+  .card[data-ctx="land_vehicle"] .tag { background: #1f5fd1; }
+  .card[data-ctx="air_vehicle"] .tag { background: #8a3fd1; }
+  .card[data-ctx="water_vehicle"] .tag { background: #0f8fa0; }
+  .card[data-ctx="menu_or_cutscene"] .tag { background: #666; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="keys">
+    <span><b>1</b>on_foot</span><span><b>2</b>land_vehicle</span><span><b>3</b>air_vehicle</span>
+    <span><b>4</b>water_vehicle</span><span><b>5</b>menu_or_cutscene</span><span><b>0</b>clear</span>
+    <span><b>F</b>first person</span><span><b>T</b>third person</span>
+    <span>click = select, shift+click = range, cmd+click = add</span>
+  </div>
+  <div class="bar">
+    <span id="count"></span>
+    <button id="export">Export labels.json</button>
+    <button id="reset" class="plain">Clear all</button>
+  </div>
+</header>
+<div id="grid"></div>
+<script>
+const DATA = __DATA__;
+const CTX = { "1": "on_foot", "2": "land_vehicle", "3": "air_vehicle", "4": "water_vehicle", "5": "menu_or_cutscene" };
+const VIEW = { f: "first_person", t: "third_person" };
+const KEY = "openps-labels:" + DATA.capture;
+const labels = JSON.parse(localStorage.getItem(KEY) || "{}"); // index -> {ctx, view}
+let selected = new Set();
+let anchor = 0;
+
+const grid = document.getElementById("grid");
+const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+document.getElementById("title").textContent = `${DATA.capture}: ${DATA.frames.length} frames, one per ${DATA.step} s`;
+
+DATA.frames.forEach((f, i) => {
+  const c = document.createElement("div");
+  c.className = "card";
+  c.dataset.i = i;
+  c.innerHTML = `<img loading="lazy" src="${f.file}" alt=""><span class="t">${fmt(f.t)}</span><span class="tag"></span>`;
+  grid.appendChild(c);
+});
+
+function paint() {
+  let done = 0;
+  grid.querySelectorAll(".card").forEach(c => {
+    const l = labels[c.dataset.i] || {};
+    c.dataset.ctx = l.ctx || "";
+    c.classList.toggle("sel", selected.has(+c.dataset.i));
+    c.querySelector(".tag").textContent = [l.ctx, l.view && l.view.replace("_", " ")].filter(Boolean).join(" / ") || "unlabeled";
+    if (l.ctx) done++;
+  });
+  document.getElementById("count").textContent = `${done} / ${DATA.frames.length} labeled`;
+  localStorage.setItem(KEY, JSON.stringify(labels));
+}
+
+grid.addEventListener("click", e => {
+  const card = e.target.closest(".card");
+  if (!card) return;
+  const i = +card.dataset.i;
+  if (e.shiftKey) {
+    const [a, b] = [Math.min(anchor, i), Math.max(anchor, i)];
+    selected = new Set(); for (let k = a; k <= b; k++) selected.add(k);
+  } else if (e.metaKey || e.ctrlKey) {
+    selected.has(i) ? selected.delete(i) : selected.add(i); anchor = i;
+  } else { selected = new Set([i]); anchor = i; }
+  paint();
+});
+
+function apply(patch) {
+  if (!selected.size) return;
+  selected.forEach(i => { labels[i] = { ...(labels[i] || {}), ...patch }; if (!labels[i].ctx && !labels[i].view) delete labels[i]; });
+  const last = Math.max(...selected);
+  if (last + 1 < DATA.frames.length) { selected = new Set([last + 1]); anchor = last + 1; }
+  paint();
+  const next = grid.children[anchor]; if (next) next.scrollIntoView({ block: "nearest" });
+}
+
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (CTX[k]) apply({ ctx: CTX[k] });
+  else if (VIEW[k]) apply({ view: VIEW[k] });
+  else if (k === "0") { selected.forEach(i => delete labels[i]); paint(); }
+});
+
+document.getElementById("export").onclick = () => {
+  const out = DATA.frames.map((f, i) => ({ file: f.file, t: f.t, context: (labels[i] || {}).ctx || null, view: (labels[i] || {}).view || null }));
+  const blob = new Blob([JSON.stringify({ capture: DATA.capture, step: DATA.step, labels: out }, null, 1)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `labels-${DATA.capture}.json`; a.click();
+};
+document.getElementById("reset").onclick = () => { if (confirm("Remove every label?")) { Object.keys(labels).forEach(k => delete labels[k]); paint(); } };
+paint();
+</script>
+</body>
+</html>

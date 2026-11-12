@@ -154,8 +154,10 @@ pub struct RenderSettings {
     pub mode: FrameMode,
     /// Shift the picture by camera rotation the stick has commanded but the stream does not show yet.
     pub camera: bool,
-    /// Make the interpolated frame with Apple's MetalFX instead of the built-in interpolator (Smooth mode, about 2x only).
+    /// Make the interpolated frames with Apple's MetalFX instead of the built-in interpolator (Smooth mode, at any rate).
     pub metalfx: bool,
+    /// With `metalfx`: when the GPU cannot keep the rate up, fall back to the built-in interpolator for a while before lowering the rate.
+    pub fx_fallback: bool,
     /// Upscale with AMD's FSR 1 (EASU, then the same finishing pass) instead of MetalFX's spatial scaler.
     pub fsr: bool,
     /// Run the MetalFX scaler in linear light (the FSR path has no such mode).
@@ -185,6 +187,7 @@ impl Default for RenderSettings {
             mode: FrameMode::ZeroLatency,
             camera: false,
             metalfx: false,
+            fx_fallback: false,
             fsr: false,
             linear_light: true,
             adaptive: false,
@@ -283,6 +286,8 @@ pub struct RenderStats {
     pub metalfx_active: bool,
     /// This Mac can do MetalFX frame interpolation.
     pub metalfx_available: bool,
+    /// Dynamic mode has handed the generated frames to the built-in interpolator because the GPU could not keep up with MetalFX.
+    pub metalfx_fallback: bool,
     /// The last picture was upscaled by FSR (EASU) instead of the MetalFX scaler.
     pub fsr_active: bool,
     /// The display changes its refresh rate frame by frame (frames are paced by the display); otherwise a rate that does not divide the
@@ -853,6 +858,9 @@ fn quick_rate(times: &std::collections::VecDeque<Instant>, now: Instant, window:
 const QUICK_MIN: usize = 3;
 const QUICK_MIN_RATE: f64 = 15.0;
 const QUICK_WINDOW: Duration = Duration::from_millis(500);
+/// How long Dynamic leaves MetalFX aside the first time the GPU cannot keep up with it, and the longest (the time doubles each time).
+const FX_REST_MIN: Duration = Duration::from_secs(30);
+const FX_REST_MAX: Duration = Duration::from_secs(300);
 
 /// One frame in the diagnostic: `(frame id, seconds since start, changed sample bytes (usize::MAX = unknown), new picture, accepted)`.
 pub type DiagRow = (u16, f64, usize, bool, bool);
@@ -961,10 +969,12 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
     // The upscaler's finishing pass (linear light, RCAS) costs about 2 ms at 4K: when the GPU keeps using most of the time between two displayed
     // pictures, it is given up (the plain upscaler is used) until the upscaling, sharpness or rate settings change.
     let (mut finish_slow, mut finish_off, mut finish_cfg) =
-        (0u32, false, (Upscale::Off, 0u16, 0u32, 0u32, 0u32, true, false, false));
+        (0u32, false, (Upscale::Off, 0u16, 0u32, 0u32, 0u32, true, false, false, false, false));
     // The adaptive frame rate: the limit the GPU's load calls for, and (when fewer pictures are shown than arrive) the moment the next
     // real picture is due, so the ones in between are dropped evenly.
     let mut ladder = RateLadder::default();
+    // Dynamic interpolator: MetalFX is set aside until this moment, and how long the next time (doubles each time it cannot keep up).
+    let (mut fx_rest_until, mut fx_rest): (Option<Instant>, Duration) = (None, Duration::ZERO);
     let mut next_due: Option<Instant> = None;
     let mut s = RenderStats::default();
 
@@ -1062,21 +1072,27 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                 settings.linear_light,
                 settings.fsr,
                 settings.adaptive,
+                settings.metalfx,
+                settings.fx_fallback,
             );
             if cfg != finish_cfg {
                 (finish_cfg, finish_off, finish_slow) = (cfg, false, 0);
                 ladder.reset(); // what the GPU can hold is found out again
+                (fx_rest_until, fx_rest) = (None, Duration::ZERO);
             }
             gpu.linear_upscale = settings.linear_light && !finish_off;
             gpu.rcas = if finish_off { 0.0 } else { settings.rcas };
             gpu.saturation = settings.saturation;
             gpu.immersion = settings.immersion;
-            // MetalFX makes exactly the midpoint between two frames, so it is the right tool when every generated frame is a midpoint (about 2x).
-            // At other multiples some generated frames would come from it and the others from the built-in interpolator, two different looks
-            // alternating, which flickers: there the built-in interpolator makes all of them.
-            let midpoints_only =
-                settings.mode == FrameMode::Smooth && generating && (1.8..=2.3).contains(&(eff_hz / src_fps));
-            gpu.fx_use = settings.metalfx && gpu.fx_available && midpoints_only;
+            // MetalFX makes every generated frame at any rate; only Dynamic sets it aside (for a while) when the GPU cannot keep up
+            if !settings.fx_fallback || fx_rest_until.is_some_and(|t| Instant::now() >= t) {
+                fx_rest_until = None;
+            }
+            gpu.fx_use = settings.metalfx
+                && gpu.fx_available
+                && settings.mode == FrameMode::Smooth
+                && generating
+                && fx_rest_until.is_none();
             gpu.fsr = settings.fsr;
 
             // Event-driven when there is nothing to generate: wait for a frame instead of redrawing the same one.
@@ -1144,10 +1160,27 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                         if settings.adaptive {
                             // the adaptive frame rate: when the pictures keep the GPU busy for most of the time between two displayed ones,
                             // the rate comes down gently (and back up when there is room), and every filter stays on
+                            let before = ladder.cap();
                             if ladder.observe(dt, eff_hz, asked_hz) {
-                                match ladder.cap() {
-                                    Some(c) => eprintln!("the GPU needs {dt:.1} ms per picture: the frame rate is held to {c} fps (asked for {asked_hz:.0})"),
-                                    None => eprintln!("the GPU has room again: back to the {asked_hz:.0} fps that was asked for"),
+                                let lowered = match (before, ladder.cap()) {
+                                    (None, Some(_)) => true,
+                                    (Some(a), Some(b)) => b < a,
+                                    _ => false,
+                                };
+                                if settings.fx_fallback && gpu.fx_use && lowered {
+                                    // Dynamic: give up MetalFX before the rate, and try it again later
+                                    fx_rest = (fx_rest * 2).clamp(FX_REST_MIN, FX_REST_MAX);
+                                    fx_rest_until = Some(Instant::now() + fx_rest);
+                                    ladder.reset();
+                                    eprintln!(
+                                        "the GPU needs {dt:.1} ms per picture with MetalFX: the built-in interpolator makes the frames for {} s",
+                                        fx_rest.as_secs()
+                                    );
+                                } else {
+                                    match ladder.cap() {
+                                        Some(c) => eprintln!("the GPU needs {dt:.1} ms per picture: the frame rate is held to {c} fps (asked for {asked_hz:.0})"),
+                                        None => eprintln!("the GPU has room again: back to the {asked_hz:.0} fps that was asked for"),
+                                    }
                                 }
                             }
                         }
@@ -1406,6 +1439,7 @@ fn run(shared: Arc<Shared>, look: SharedLook, init: std::sync::mpsc::Sender<Resu
                     lock(&shown).summary(1000.0 / eff_hz);
                 s.metalfx_active = gpu.fx_active();
                 s.metalfx_available = gpu.fx_available;
+                s.metalfx_fallback = fx_rest_until.is_some();
                 s.fsr_active = gpu.fsr_active();
                 s.finish_pass = gpu.finish_pass_active();
                 s.linear_active = gpu.linear_active();
