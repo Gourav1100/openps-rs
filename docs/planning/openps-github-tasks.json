@@ -1,0 +1,1140 @@
+{
+  "repository": "Gourav1100/openps-rs",
+  "audit_commit": "a27431fbe84b3848d06ad3ea284d85e01773f2ef",
+  "spec_url": "https://github.com/Gourav1100/openps-rs/issues/1",
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Establish replay fixtures, performance baselines and hardware qualification matrix",
+      "priority": "P0",
+      "phase": 0,
+      "size": "M",
+      "deps": [],
+      "paths": [
+        "crates/openps-testkit/src/stream.rs",
+        "crates/openps-demo/src/lib.rs",
+        "crates/openps-metal/tests/stage_cost.rs",
+        "crates/openps-stream/tests/perf.rs",
+        "README.md"
+      ],
+      "problem": "Current README declares mock-only console validation; optional real-clip tests depend on external assets. New performance claims need reproducible baselines.",
+      "steps": [
+        "Inventory existing test and capture assets, their provenance and missing model/media downloads.",
+        "Create short redistributable or generated H.264/HEVC replay fixtures with loss, duplication, variable cadence and reconnect annotations.",
+        "Record reference hardware, OS, driver, display refresh, codec/profile, resolution and backend for every result.",
+        "Capture current macOS CPU/GPU stage timing, queue age, input processing and A/V offset before refactoring.",
+        "Define device classes for Windows/Linux, Android phone/tablet/TV and iPhone/iPad; identify actual PS4/PS5 test access."
+      ],
+      "accept": [
+        "A clean checkout can run portable replay without sibling analysis directories.",
+        "Baseline reports identify measured versus simulated data and include p50/p95/p99 where meaningful.",
+        "Missing hardware/assets are explicit blockers, never recorded as passing tests."
+      ],
+      "rollback": "Fixtures and instrumentation are additive; keep diagnostics opt-in and remove overhead from normal frame loops.",
+      "number": 2,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/2",
+      "body": "Parent specification: #1\n\n**Task:** T01 · **Priority:** P0 · **Phase:** 0 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nCurrent README declares mock-only console validation; optional real-clip tests depend on external assets. New performance claims need reproducible baselines.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-testkit/src/stream.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-testkit/src/stream.rs#L1)\n- [crates/openps-demo/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-demo/src/lib.rs#L1)\n- [crates/openps-metal/tests/stage_cost.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/tests/stage_cost.rs#L1)\n- [crates/openps-stream/tests/perf.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-stream/tests/perf.rs#L1)\n- [README.md:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/README.md#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Inventory existing test and capture assets, their provenance and missing model/media downloads.\n- [ ] Create short redistributable or generated H.264/HEVC replay fixtures with loss, duplication, variable cadence and reconnect annotations.\n- [ ] Record reference hardware, OS, driver, display refresh, codec/profile, resolution and backend for every result.\n- [ ] Capture current macOS CPU/GPU stage timing, queue age, input processing and A/V offset before refactoring.\n- [ ] Define device classes for Windows/Linux, Android phone/tablet/TV and iPhone/iPad; identify actual PS4/PS5 test access.\n\n## Dependencies\n\nNo implementation dependencies; start with the audited baseline.\n\n## Acceptance criteria\n\n- [ ] A clean checkout can run portable replay without sibling analysis directories.\n- [ ] Baseline reports identify measured versus simulated data and include p50/p95/p99 where meaningful.\n- [ ] Missing hardware/assets are explicit blockers, never recorded as passing tests.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nFixtures and instrumentation are additive; keep diagnostics opt-in and remove overhead from normal frame loops.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T02",
+      "title": "Remove platform compile blockers and introduce target-specific dependency boundaries",
+      "priority": "P0",
+      "phase": 1,
+      "size": "M",
+      "deps": [
+        "T01"
+      ],
+      "paths": [
+        "Cargo.toml",
+        "src-tauri/Cargo.toml",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/paths.rs",
+        "crates/openps-core/src/store.rs",
+        "crates/openps-psn/src/store.rs",
+        "crates/openps-metal/Cargo.toml"
+      ],
+      "problem": "Non-macOS branches use NullMedia and unguarded Metal types; Unix-specific private file operations block Windows compilation.",
+      "steps": [
+        "Build an explicit target/feature inventory including demo and psn-live.",
+        "Move portable types out of macOS-only dependencies; gate framework linkage and native modules at the narrowest layer.",
+        "Route file creation/replacement through a platform storage abstraction.",
+        "Audit all build.rs files and Apple desktop APIs before enabling iOS.",
+        "Add portable compile targets first, then compile the shell with stubs that report unavailable capabilities honestly."
+      ],
+      "accept": [
+        "Portable workspace crates compile on Windows/Linux target hosts.",
+        "Non-Apple builds do not link Objective-C/Apple frameworks.",
+        "macOS tests/build remain unchanged; stub builds are not marketed as playable."
+      ],
+      "rollback": "Use compatibility re-exports and small commits; preserve existing macOS adapter until replacement is qualified.",
+      "number": 3,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/3",
+      "body": "Parent specification: #1\n\n**Task:** T02 · **Priority:** P0 · **Phase:** 1 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nNon-macOS branches use NullMedia and unguarded Metal types; Unix-specific private file operations block Windows compilation.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/Cargo.toml#L1)\n- [src-tauri/Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/Cargo.toml#L1)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n- [src-tauri/src/paths.rs:25](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/paths.rs#L25)\n- [crates/openps-core/src/store.rs:255](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-core/src/store.rs#L255)\n- [crates/openps-psn/src/store.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-psn/src/store.rs#L1)\n- [crates/openps-metal/Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/Cargo.toml#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Build an explicit target/feature inventory including demo and psn-live.\n- [ ] Move portable types out of macOS-only dependencies; gate framework linkage and native modules at the narrowest layer.\n- [ ] Route file creation/replacement through a platform storage abstraction.\n- [ ] Audit all build.rs files and Apple desktop APIs before enabling iOS.\n- [ ] Add portable compile targets first, then compile the shell with stubs that report unavailable capabilities honestly.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n\n## Acceptance criteria\n\n- [ ] Portable workspace crates compile on Windows/Linux target hosts.\n- [ ] Non-Apple builds do not link Objective-C/Apple frameworks.\n- [ ] macOS tests/build remain unchanged; stub builds are not marketed as playable.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nUse compatibility re-exports and small commits; preserve existing macOS adapter until replacement is qualified.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T03",
+      "title": "Define owned media frames, decoder interfaces and epoch-aware timestamps",
+      "priority": "P0",
+      "phase": 1,
+      "size": "L",
+      "deps": [
+        "T02"
+      ],
+      "paths": [
+        "crates/openps-video/src/pipeline.rs",
+        "crates/openps-video/src/media.rs",
+        "crates/openps-video/src/vt.rs",
+        "crates/openps-core/src/events.rs",
+        "crates/openps-stream/src/video.rs"
+      ],
+      "problem": "Concrete VT frame types and id*1500 timestamp encoding couple decoder, renderer and scene inference to one platform.",
+      "steps": [
+        "Add proposed openps-media types for frame identity, stream epoch, estimated/source timestamps, format/color/crop and native leases.",
+        "Introduce asynchronous decoder contract and typed error/recovery states while adapting existing VT code.",
+        "Unwrap wire sequence IDs once; preserve original frame identity independently of decoder PTS.",
+        "Document synchronization and release-thread ownership for every native frame variant.",
+        "Bound decode/completion queues and ignore callbacks from obsolete epochs."
+      ],
+      "accept": [
+        "Tests cover wraparound, 30/60 fps, restart, format change, late callback, loss and shutdown.",
+        "No native resource can recycle while the GPU or scene tap retains it.",
+        "Existing IDR throttling and parameter-set behavior remain covered."
+      ],
+      "rollback": "Keep an adapter for the old VT call sites until all consumers migrate; do not change wire protocol timing in this task.",
+      "number": 4,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/4",
+      "body": "Parent specification: #1\n\n**Task:** T03 · **Priority:** P0 · **Phase:** 1 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nConcrete VT frame types and id*1500 timestamp encoding couple decoder, renderer and scene inference to one platform.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/pipeline.rs:55](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/pipeline.rs#L55)\n- [crates/openps-video/src/media.rs:16](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/media.rs#L16)\n- [crates/openps-video/src/vt.rs:436](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/vt.rs#L436)\n- [crates/openps-core/src/events.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-core/src/events.rs#L1)\n- [crates/openps-stream/src/video.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-stream/src/video.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add proposed openps-media types for frame identity, stream epoch, estimated/source timestamps, format/color/crop and native leases.\n- [ ] Introduce asynchronous decoder contract and typed error/recovery states while adapting existing VT code.\n- [ ] Unwrap wire sequence IDs once; preserve original frame identity independently of decoder PTS.\n- [ ] Document synchronization and release-thread ownership for every native frame variant.\n- [ ] Bound decode/completion queues and ignore callbacks from obsolete epochs.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n\n## Acceptance criteria\n\n- [ ] Tests cover wraparound, 30/60 fps, restart, format change, late callback, loss and shutdown.\n- [ ] No native resource can recycle while the GPU or scene tap retains it.\n- [ ] Existing IDR throttling and parameter-set behavior remain covered.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep an adapter for the old VT call sites until all consumers migrate; do not change wire protocol timing in this task.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T04",
+      "title": "Extract portable render timing, camera and adaptive-quality policy",
+      "priority": "P0",
+      "phase": 1,
+      "size": "M",
+      "deps": [
+        "T03"
+      ],
+      "paths": [
+        "crates/openps-metal/src/timeline.rs",
+        "crates/openps-metal/src/ladder.rs",
+        "crates/openps-metal/src/look.rs",
+        "crates/openps-metal/src/camera.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "src-tauri/src/lib.rs"
+      ],
+      "problem": "Reusable scheduling and camera policy currently live inside an Apple-dependent crate and leak into shell signatures.",
+      "steps": [
+        "Create proposed openps-render crate and mechanically move timeline, ladder, camera and SharedLook with compatibility exports.",
+        "Move settings/statistics contracts after removing native resource types.",
+        "Keep Metal resource creation and presentation in openps-metal.",
+        "Add platform clock/display capability inputs instead of NSScreen assumptions.",
+        "Document that actual ladder STEP_HZ is 5 although README says 15."
+      ],
+      "accept": [
+        "Existing timeline/replay/camera/ladder tests run against extracted code on non-Apple hosts.",
+        "No policy behavior changes in extraction PRs.",
+        "macOS before/after replay output and timing counters remain equivalent within declared tolerance."
+      ],
+      "rollback": "Re-export old paths for a migration window and keep behavior changes in separate PRs.",
+      "number": 5,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/5",
+      "body": "Parent specification: #1\n\n**Task:** T04 · **Priority:** P0 · **Phase:** 1 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nReusable scheduling and camera policy currently live inside an Apple-dependent crate and leak into shell signatures.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/timeline.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/timeline.rs#L1)\n- [crates/openps-metal/src/ladder.rs:22](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/ladder.rs#L22)\n- [crates/openps-metal/src/look.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/look.rs#L1)\n- [crates/openps-metal/src/camera.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/camera.rs#L1)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create proposed openps-render crate and mechanically move timeline, ladder, camera and SharedLook with compatibility exports.\n- [ ] Move settings/statistics contracts after removing native resource types.\n- [ ] Keep Metal resource creation and presentation in openps-metal.\n- [ ] Add platform clock/display capability inputs instead of NSScreen assumptions.\n- [ ] Document that actual ladder STEP_HZ is 5 although README says 15.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n\n## Acceptance criteria\n\n- [ ] Existing timeline/replay/camera/ladder tests run against extracted code on non-Apple hosts.\n- [ ] No policy behavior changes in extraction PRs.\n- [ ] macOS before/after replay output and timing counters remain equivalent within declared tolerance.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nRe-export old paths for a migration window and keep behavior changes in separate PRs.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T05",
+      "title": "Prototype decoder-to-GPU interoperability before committing backend design",
+      "priority": "P0",
+      "phase": 0,
+      "size": "R",
+      "deps": [
+        "T01"
+      ],
+      "paths": [
+        "crates/openps-video/src/vt.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "src-tauri/src/video.rs"
+      ],
+      "problem": "Native decoder outputs are not automatically importable by a generic GPU library; this is the largest architecture risk.",
+      "steps": [
+        "Create isolated proposed workbench examples for D3D11 MFT to D3D12, Linux VA-API/DMA-BUF to Vulkan, and Android MediaCodec to GLES/AHardwareBuffer Vulkan.",
+        "Check adapter identity, pixel formats, format modifiers, external synchronization and producer-surface compatibility.",
+        "Measure zero-copy versus application-owned one-copy textures, including decoder pool retention.",
+        "Evaluate pinned wgpu public/HAL APIs versus small native interop modules; record unsafe ownership proofs.",
+        "Produce ADR with supported paths, fallback selection, tested hardware and explicit failed cases."
+      ],
+      "accept": [
+        "Each prototype displays a known clip with correct color and survives repeated resize/teardown.",
+        "No unsupported path is marked zero-copy.",
+        "ADR gives a go/no-go decision and library versions for each shipping backend; failed optional import does not block basic playback."
+      ],
+      "rollback": "Examples do not replace production rendering; select copy fallback or a native backend when safe import cannot be demonstrated.",
+      "number": 6,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/6",
+      "body": "Parent specification: #1\n\n**Task:** T05 · **Priority:** P0 · **Phase:** 0 · **Estimate:** R (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nNative decoder outputs are not automatically importable by a generic GPU library; this is the largest architecture risk.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/vt.rs:436](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/vt.rs#L436)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create isolated proposed workbench examples for D3D11 MFT to D3D12, Linux VA-API/DMA-BUF to Vulkan, and Android MediaCodec to GLES/AHardwareBuffer Vulkan.\n- [ ] Check adapter identity, pixel formats, format modifiers, external synchronization and producer-surface compatibility.\n- [ ] Measure zero-copy versus application-owned one-copy textures, including decoder pool retention.\n- [ ] Evaluate pinned wgpu public/HAL APIs versus small native interop modules; record unsafe ownership proofs.\n- [ ] Produce ADR with supported paths, fallback selection, tested hardware and explicit failed cases.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n\n## Acceptance criteria\n\n- [ ] Each prototype displays a known clip with correct color and survives repeated resize/teardown.\n- [ ] No unsupported path is marked zero-copy.\n- [ ] ADR gives a go/no-go decision and library versions for each shipping backend; failed optional import does not block basic playback.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nExamples do not replace production rendering; select copy fallback or a native backend when safe import cannot be demonstrated.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T06",
+      "title": "Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets",
+      "priority": "P0",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T03",
+        "T04",
+        "T05"
+      ],
+      "paths": [
+        "crates/openps-metal/src/gpu.rs",
+        "crates/openps-metal/src/shaders.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "src-tauri/src/video.rs"
+      ],
+      "problem": "New platforms need real presentation and processing, not only protocol support.",
+      "steps": [
+        "Create proposed openps-render-wgpu with native surface creation, import/upload paths and baseline color conversion/presentation.",
+        "Implement feature/limit enumeration, adapter selection, explicit backend selection and failure reason codes.",
+        "Use bounded command submission and native synchronization from T05; cache pipelines and pool resources.",
+        "Handle crop/stride, full/limited range, SDR color metadata, resize/minimize/device loss.",
+        "Add resource planner and distinguish texture working-set from decoder/model allocations."
+      ],
+      "accept": [
+        "Windows D3D12 and Linux/Android Vulkan qualified paths display replay correctly.",
+        "Device loss and resize never retain stale surfaces; allocation failures fall back cleanly.",
+        "Stats report actual backend, import/copy route, limits and queue age."
+      ],
+      "rollback": "Preserve native Metal and allow native/bilinear or copy-upload mode if advanced processing fails.",
+      "number": 7,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/7",
+      "body": "Parent specification: #1\n\n**Task:** T06 · **Priority:** P0 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nNew platforms need real presentation and processing, not only protocol support.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/gpu.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/gpu.rs#L1)\n- [crates/openps-metal/src/shaders.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/shaders.rs#L1)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create proposed openps-render-wgpu with native surface creation, import/upload paths and baseline color conversion/presentation.\n- [ ] Implement feature/limit enumeration, adapter selection, explicit backend selection and failure reason codes.\n- [ ] Use bounded command submission and native synchronization from T05; cache pipelines and pool resources.\n- [ ] Handle crop/stride, full/limited range, SDR color metadata, resize/minimize/device loss.\n- [ ] Add resource planner and distinguish texture working-set from decoder/model allocations.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T05: #6 — Prototype decoder-to-GPU interoperability before committing backend design\n\n## Acceptance criteria\n\n- [ ] Windows D3D12 and Linux/Android Vulkan qualified paths display replay correctly.\n- [ ] Device loss and resize never retain stale surfaces; allocation failures fall back cleanly.\n- [ ] Stats report actual backend, import/copy route, limits and queue age.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nPreserve native Metal and allow native/bilinear or copy-upload mode if advanced processing fails.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T07",
+      "title": "Add explicit OpenGL and OpenGL ES compatibility rendering",
+      "priority": "P1",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T03",
+        "T04",
+        "T05"
+      ],
+      "paths": [
+        "crates/openps-metal/src/shaders.rs",
+        "src-tauri/src/video.rs",
+        "src-tauri/Cargo.toml"
+      ],
+      "problem": "GL support must include actual native context/external-texture handling and must not imply uniform compute capability.",
+      "steps": [
+        "Create proposed openps-render-gl with desktop GL context and EGL/GLES implementations; document exact minimum feature sets.",
+        "Implement upload and YUV/external-OES paths, fragment spatial scaling and presentation.",
+        "Keep capability tiers for basic video, spatial filters and compute motion generation separate.",
+        "On Windows distinguish native OpenGL from ANGLE translation in UI/diagnostics.",
+        "Add fallback ordering and explicit errors for forced unavailable backends."
+      ],
+      "accept": [
+        "A no-compute device can display video and use qualified spatial upscale.",
+        "GL/GLES conformance images match reference tolerances.",
+        "Context recreation, focus, resize and thread ownership tests pass on real drivers."
+      ],
+      "rollback": "Fail optional passes independently; retain basic rendering and expose why FG is unavailable.",
+      "number": 8,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/8",
+      "body": "Parent specification: #1\n\n**Task:** T07 · **Priority:** P1 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nGL support must include actual native context/external-texture handling and must not imply uniform compute capability.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/shaders.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/shaders.rs#L1)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [src-tauri/Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/Cargo.toml#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create proposed openps-render-gl with desktop GL context and EGL/GLES implementations; document exact minimum feature sets.\n- [ ] Implement upload and YUV/external-OES paths, fragment spatial scaling and presentation.\n- [ ] Keep capability tiers for basic video, spatial filters and compute motion generation separate.\n- [ ] On Windows distinguish native OpenGL from ANGLE translation in UI/diagnostics.\n- [ ] Add fallback ordering and explicit errors for forced unavailable backends.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T05: #6 — Prototype decoder-to-GPU interoperability before committing backend design\n\n## Acceptance criteria\n\n- [ ] A no-compute device can display video and use qualified spatial upscale.\n- [ ] GL/GLES conformance images match reference tolerances.\n- [ ] Context recreation, focus, resize and thread ownership tests pass on real drivers.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nFail optional passes independently; retain basic rendering and expose why FG is unavailable.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T08",
+      "title": "Implement Windows Media Foundation decode and native gameplay host",
+      "priority": "P0",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T02",
+        "T03",
+        "T05",
+        "T06"
+      ],
+      "paths": [
+        "crates/openps-video/src/pipeline.rs",
+        "crates/openps-video/src/nal.rs",
+        "src-tauri/src/video.rs",
+        "src-tauri/src/lib.rs"
+      ],
+      "problem": "Windows currently has no usable media sink or native video host.",
+      "steps": [
+        "Add proposed decoder/windows.rs for hardware MFT enumeration, configuration, asynchronous decode and flush/rebuild.",
+        "Use D3D11 device-manager integration and the tested shared/copy path to rendering.",
+        "Handle H.264/HEVC availability, parameter-set updates, device removal and unsupported profiles.",
+        "Add proposed platform/windows.rs child-window/composition host with WebView2 overlay, DPI/fullscreen/monitor transitions.",
+        "Integrate stream lifecycle and report fatal decoder initialization rather than silently using NullMedia."
+      ],
+      "accept": [
+        "Mock and real-console H.264 streams play with audio/input once dependent integrations land; HEVC is qualified or gracefully negotiated down.",
+        "Tests cover resolution changes, decoder failure, repeated connect/disconnect and minimize.",
+        "D3D12 and Vulkan selection use verified import/fallback paths."
+      ],
+      "rollback": "Offer software decode/native resolution where qualified; otherwise report a clear codec error and preserve app navigation.",
+      "number": 9,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/9",
+      "body": "Parent specification: #1\n\n**Task:** T08 · **Priority:** P0 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nWindows currently has no usable media sink or native video host.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/pipeline.rs:55](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/pipeline.rs#L55)\n- [crates/openps-video/src/nal.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/nal.rs#L1)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add proposed decoder/windows.rs for hardware MFT enumeration, configuration, asynchronous decode and flush/rebuild.\n- [ ] Use D3D11 device-manager integration and the tested shared/copy path to rendering.\n- [ ] Handle H.264/HEVC availability, parameter-set updates, device removal and unsupported profiles.\n- [ ] Add proposed platform/windows.rs child-window/composition host with WebView2 overlay, DPI/fullscreen/monitor transitions.\n- [ ] Integrate stream lifecycle and report fatal decoder initialization rather than silently using NullMedia.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T05: #6 — Prototype decoder-to-GPU interoperability before committing backend design\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n\n## Acceptance criteria\n\n- [ ] Mock and real-console H.264 streams play with audio/input once dependent integrations land; HEVC is qualified or gracefully negotiated down.\n- [ ] Tests cover resolution changes, decoder failure, repeated connect/disconnect and minimize.\n- [ ] D3D12 and Vulkan selection use verified import/fallback paths.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nOffer software decode/native resolution where qualified; otherwise report a clear codec error and preserve app navigation.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T09",
+      "title": "Implement Linux decode, Wayland/X11 surfaces and distribution integration",
+      "priority": "P0",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T02",
+        "T03",
+        "T05",
+        "T06",
+        "T07"
+      ],
+      "paths": [
+        "crates/openps-video/src/pipeline.rs",
+        "src-tauri/src/video.rs",
+        "src-tauri/src/lib.rs",
+        "scripts/build.sh"
+      ],
+      "problem": "Linux requires native media, compositor-specific surfaces and controlled codec/runtime dependencies.",
+      "steps": [
+        "Add proposed decoder/linux.rs around a narrowly configured FFmpeg/libavcodec wrapper.",
+        "Establish software decode first and add VA-API export/import with modifiers, stride and synchronization checks.",
+        "Qualify Intel/AMD and document NVIDIA hardware or software paths rather than inferring support.",
+        "Add proposed platform/linux.rs for Wayland and X11 lifecycle/composition.",
+        "Define supported distro/library baseline and package dependencies, sandbox GPU/audio access and read-only installation behavior."
+      ],
+      "accept": [
+        "Wayland and X11 complete replay/session flows with Vulkan and a GL fallback.",
+        "Decoder/driver absence produces a working fallback or actionable error.",
+        "Test default audio/display change, suspend/resume and compositor resize without crashes."
+      ],
+      "rollback": "Keep software decode/upload as a diagnostic fallback with honest performance limits.",
+      "number": 10,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/10",
+      "body": "Parent specification: #1\n\n**Task:** T09 · **Priority:** P0 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nLinux requires native media, compositor-specific surfaces and controlled codec/runtime dependencies.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/pipeline.rs:55](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/pipeline.rs#L55)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n- [scripts/build.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/build.sh#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add proposed decoder/linux.rs around a narrowly configured FFmpeg/libavcodec wrapper.\n- [ ] Establish software decode first and add VA-API export/import with modifiers, stride and synchronization checks.\n- [ ] Qualify Intel/AMD and document NVIDIA hardware or software paths rather than inferring support.\n- [ ] Add proposed platform/linux.rs for Wayland and X11 lifecycle/composition.\n- [ ] Define supported distro/library baseline and package dependencies, sandbox GPU/audio access and read-only installation behavior.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T05: #6 — Prototype decoder-to-GPU interoperability before committing backend design\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n- T07: #8 — Add explicit OpenGL and OpenGL ES compatibility rendering\n\n## Acceptance criteria\n\n- [ ] Wayland and X11 complete replay/session flows with Vulkan and a GL fallback.\n- [ ] Decoder/driver absence produces a working fallback or actionable error.\n- [ ] Test default audio/display change, suspend/resume and compositor resize without crashes.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep software decode/upload as a diagnostic fallback with honest performance limits.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T10",
+      "title": "Port Opus decoding and audio output with independent A/V clock policy",
+      "priority": "P0",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T03"
+      ],
+      "paths": [
+        "crates/openps-audio/src/lib.rs",
+        "crates/openps-audio/src/opus.rs",
+        "crates/openps-audio/src/player.rs",
+        "crates/openps-audio/src/media.rs"
+      ],
+      "problem": "Audio is currently Apple-only; silent clients are not playable platform ports.",
+      "steps": [
+        "Separate portable Opus/PLC/jitter/drift policy from native audio output.",
+        "Add WASAPI, Linux and Oboe adapters; retain/adapt Apple playback with AVAudioSession on iOS.",
+        "Use preallocated PCM ring and nonblocking allocation-free callbacks; count contention, underrun, overrun and route latency.",
+        "Bound jitter buffering and add measured clock-drift correction rather than repeated large trims.",
+        "Handle audio focus/interruption, sample-rate/channel changes, hotplug and device loss."
+      ],
+      "accept": [
+        "Golden Opus decode and malformed-packet tests pass.",
+        "A/V offset and callback deadlines meet defined reference-device targets.",
+        "Bluetooth/HDMI route latency is measured separately, not hidden in nominal buffer settings."
+      ],
+      "rollback": "Retain conservative buffer profiles and existing Apple output until new output passes soak tests.",
+      "number": 11,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/11",
+      "body": "Parent specification: #1\n\n**Task:** T10 · **Priority:** P0 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nAudio is currently Apple-only; silent clients are not playable platform ports.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-audio/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-audio/src/lib.rs#L1)\n- [crates/openps-audio/src/opus.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-audio/src/opus.rs#L1)\n- [crates/openps-audio/src/player.rs:88](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-audio/src/player.rs#L88)\n- [crates/openps-audio/src/media.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-audio/src/media.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Separate portable Opus/PLC/jitter/drift policy from native audio output.\n- [ ] Add WASAPI, Linux and Oboe adapters; retain/adapt Apple playback with AVAudioSession on iOS.\n- [ ] Use preallocated PCM ring and nonblocking allocation-free callbacks; count contention, underrun, overrun and route latency.\n- [ ] Bound jitter buffering and add measured clock-drift correction rather than repeated large trims.\n- [ ] Handle audio focus/interruption, sample-rate/channel changes, hotplug and device loss.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n\n## Acceptance criteria\n\n- [ ] Golden Opus decode and malformed-packet tests pass.\n- [ ] A/V offset and callback deadlines meet defined reference-device targets.\n- [ ] Bluetooth/HDMI route latency is measured separately, not hidden in nominal buffer settings.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nRetain conservative buffer profiles and existing Apple output until new output passes soak tests.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T11",
+      "title": "Extract portable input host and implement Windows/Linux capture adapters",
+      "priority": "P0",
+      "phase": 2,
+      "size": "L",
+      "deps": [
+        "T02",
+        "T04"
+      ],
+      "paths": [
+        "crates/openps-input/src/engine.rs",
+        "crates/openps-input/src/mapping.rs",
+        "crates/openps-macinput/src/hub.rs",
+        "crates/openps-macinput/src/runner.rs",
+        "src-tauri/src/input.rs"
+      ],
+      "problem": "The mapping engine is portable, but its runner, input collection and cursor capture are tied to macOS.",
+      "steps": [
+        "Add proposed openps-input-host for physical key normalization, bounded delta accumulation and capture state machine.",
+        "Keep engine::Platform, separating in-app capture from target-app management operations.",
+        "Implement Windows Raw Input/focus/confinement and Linux Wayland relative-pointer/constraints plus X11 raw capture.",
+        "Prevent native/DOM double delivery and separate text-entry/IME from gameplay scan codes.",
+        "Reset held state, mouse deltas and output pad on release, disconnect and focus loss."
+      ],
+      "accept": [
+        "Tests cover repeat, modifiers, layouts, wheel/buttons, reconnect and input-source arbitration.",
+        "20-minute movement never hits a pointer edge on qualified capture paths.",
+        "Unsupported Wayland capture is reported, with working release/navigation."
+      ],
+      "rollback": "Keep macinput as an adapter; fall back to released UI mode rather than partially captured gameplay.",
+      "number": 12,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/12",
+      "body": "Parent specification: #1\n\n**Task:** T11 · **Priority:** P0 · **Phase:** 2 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nThe mapping engine is portable, but its runner, input collection and cursor capture are tied to macOS.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-input/src/engine.rs:36](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/engine.rs#L36)\n- [crates/openps-input/src/mapping.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/mapping.rs#L1)\n- [crates/openps-macinput/src/hub.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-macinput/src/hub.rs#L1)\n- [crates/openps-macinput/src/runner.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-macinput/src/runner.rs#L1)\n- [src-tauri/src/input.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/input.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add proposed openps-input-host for physical key normalization, bounded delta accumulation and capture state machine.\n- [ ] Keep engine::Platform, separating in-app capture from target-app management operations.\n- [ ] Implement Windows Raw Input/focus/confinement and Linux Wayland relative-pointer/constraints plus X11 raw capture.\n- [ ] Prevent native/DOM double delivery and separate text-entry/IME from gameplay scan codes.\n- [ ] Reset held state, mouse deltas and output pad on release, disconnect and focus loss.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n\n## Acceptance criteria\n\n- [ ] Tests cover repeat, modifiers, layouts, wheel/buttons, reconnect and input-source arbitration.\n- [ ] 20-minute movement never hits a pointer edge on qualified capture paths.\n- [ ] Unsupported Wayland capture is reported, with working release/navigation.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep macinput as an adapter; fall back to released UI mode rather than partially captured gameplay.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T12",
+      "title": "Build Android native shell, MediaCodec surfaces and lifecycle integration",
+      "priority": "P0",
+      "phase": 3,
+      "size": "L",
+      "deps": [
+        "T03",
+        "T05",
+        "T06",
+        "T07",
+        "T10"
+      ],
+      "paths": [
+        "src-tauri/src/lib.rs",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/Cargo.toml",
+        "crates/openps-video/src/pipeline.rs"
+      ],
+      "problem": "A mobile entry-point attribute and Android config stub do not implement native playback or lifecycle.",
+      "steps": [
+        "Create reproducible Android generated project and proposed local platform plugin in Kotlin/Rust.",
+        "Host native surface with verified WebView composition and direct native input/decoder bridge.",
+        "Implement MediaCodec async decode, processable versus direct-display surfaces, output crop and low-latency capability probing.",
+        "Handle surface destruction, activity recreation, memory pressure, audio focus, screen-off and network changes.",
+        "Build supported ABIs and validate native library/page-size packaging with pinned SDK/NDK."
+      ],
+      "accept": [
+        "Android phone/tablet replays H.264/qualified HEVC with audio and selectable Vulkan/GLES or direct surface fallback.",
+        "Repeated pause/resume and surface replacement do not leak, deadlock or publish stale frames.",
+        "Unsupported postprocessing surface modes produce explicit effective settings."
+      ],
+      "rollback": "Direct-display MediaCodec path remains available; switching surface type uses a controlled decoder restart.",
+      "number": 13,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/13",
+      "body": "Parent specification: #1\n\n**Task:** T12 · **Priority:** P0 · **Phase:** 3 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nA mobile entry-point attribute and Android config stub do not implement native playback or lifecycle.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n- [src-tauri/tauri.conf.json:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/tauri.conf.json#L1)\n- [src-tauri/Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/Cargo.toml#L1)\n- [crates/openps-video/src/pipeline.rs:55](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/pipeline.rs#L55)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create reproducible Android generated project and proposed local platform plugin in Kotlin/Rust.\n- [ ] Host native surface with verified WebView composition and direct native input/decoder bridge.\n- [ ] Implement MediaCodec async decode, processable versus direct-display surfaces, output crop and low-latency capability probing.\n- [ ] Handle surface destruction, activity recreation, memory pressure, audio focus, screen-off and network changes.\n- [ ] Build supported ABIs and validate native library/page-size packaging with pinned SDK/NDK.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T05: #6 — Prototype decoder-to-GPU interoperability before committing backend design\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n- T07: #8 — Add explicit OpenGL and OpenGL ES compatibility rendering\n- T10: #11 — Port Opus decoding and audio output with independent A/V clock policy\n\n## Acceptance criteria\n\n- [ ] Android phone/tablet replays H.264/qualified HEVC with audio and selectable Vulkan/GLES or direct surface fallback.\n- [ ] Repeated pause/resume and surface replacement do not leak, deadlock or publish stale frames.\n- [ ] Unsupported postprocessing surface modes produce explicit effective settings.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nDirect-display MediaCodec path remains available; switching surface type uses a controlled decoder restart.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T13",
+      "title": "Implement Android pointer lock, physical keyboard mapping and fixed-landscape gameplay",
+      "priority": "P0",
+      "phase": 3,
+      "size": "M",
+      "deps": [
+        "T11",
+        "T12"
+      ],
+      "paths": [
+        "crates/openps-input/src/engine.rs",
+        "src-tauri/src/input.rs",
+        "dist/app.js",
+        "dist/style.css",
+        "src-tauri/tauri.conf.json"
+      ],
+      "problem": "Requested mouse lock and landscape behavior must be native, focus-aware and robust to OS windowing overrides.",
+      "steps": [
+        "Add requestPointerCapture/onPointerCaptureChange/captured-event handling to the native gameplay view.",
+        "Forward physical key transitions to shared input host; preserve IME/UI editing and prevent duplicate DOM input.",
+        "Implement capture states, visible release button and neutral-pad/reset on capture loss.",
+        "Request landscape orientation and maintain a landscape viewport with letterboxing when OS window bounds override it.",
+        "Transform touch/pointer coordinates after resize, fold/unfold and density changes."
+      ],
+      "accept": [
+        "USB/Bluetooth keyboard and mouse pass sustained relative movement, unplug/reconnect, modifiers and release tests.",
+        "Phone rotation cannot turn gameplay into portrait content.",
+        "Android 16/17 large-screen and desktop-window behavior is documented from physical/emulator tests; system gestures still work."
+      ],
+      "rollback": "If capture fails, show released/unavailable state and retain touch/controller navigation; never fake locked state.",
+      "number": 14,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/14",
+      "body": "Parent specification: #1\n\n**Task:** T13 · **Priority:** P0 · **Phase:** 3 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nRequested mouse lock and landscape behavior must be native, focus-aware and robust to OS windowing overrides.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-input/src/engine.rs:36](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/engine.rs#L36)\n- [src-tauri/src/input.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/input.rs#L1)\n- [dist/app.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/app.js#L1)\n- [dist/style.css:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/style.css#L1)\n- [src-tauri/tauri.conf.json:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/tauri.conf.json#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add requestPointerCapture/onPointerCaptureChange/captured-event handling to the native gameplay view.\n- [ ] Forward physical key transitions to shared input host; preserve IME/UI editing and prevent duplicate DOM input.\n- [ ] Implement capture states, visible release button and neutral-pad/reset on capture loss.\n- [ ] Request landscape orientation and maintain a landscape viewport with letterboxing when OS window bounds override it.\n- [ ] Transform touch/pointer coordinates after resize, fold/unfold and density changes.\n\n## Dependencies\n\n- T11: #12 — Extract portable input host and implement Windows/Linux capture adapters\n- T12: #13 — Build Android native shell, MediaCodec surfaces and lifecycle integration\n\n## Acceptance criteria\n\n- [ ] USB/Bluetooth keyboard and mouse pass sustained relative movement, unplug/reconnect, modifiers and release tests.\n- [ ] Phone rotation cannot turn gameplay into portrait content.\n- [ ] Android 16/17 large-screen and desktop-window behavior is documented from physical/emulator tests; system gestures still work.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nIf capture fails, show released/unavailable state and retain touch/controller navigation; never fake locked state.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T14",
+      "title": "Deliver Android TV launcher, remote-first UX and low-resource qualification",
+      "priority": "P0",
+      "phase": 3,
+      "size": "M",
+      "deps": [
+        "T12",
+        "T13",
+        "T23"
+      ],
+      "paths": [
+        "dist/index.html",
+        "dist/app.js",
+        "dist/style.css",
+        "src-tauri/tauri.conf.json"
+      ],
+      "problem": "Android TV needs a complete D-pad-first product flow and different performance defaults from phones.",
+      "steps": [
+        "Add Leanback launcher, banner and touchscreen-not-required declarations to reproducible manifest customization.",
+        "Implement TV-specific focus graph, visible focus, Back behavior, large targets and overscan-safe layout.",
+        "Make pairing/authentication/settings/release/disconnect possible without mouse, touch or F-keys.",
+        "Default to native resolution/no FG and conservative inference until sustained-load qualification.",
+        "Test HDMI hotplug, 59.94/60 Hz, sleep, Bluetooth reconnect and low-memory dongles."
+      ],
+      "accept": [
+        "All onboarding and gameplay-management flows work with a basic remote.",
+        "Actual TV hardware streams audio/video and recovers from sleep and HDMI route changes.",
+        "Device capability report distinguishes panel resolution from decode/processing limits."
+      ],
+      "rollback": "Reuse Android basic media mode; optional effects disable independently without breaking navigation.",
+      "number": 15,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/15",
+      "body": "Parent specification: #1\n\n**Task:** T14 · **Priority:** P0 · **Phase:** 3 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nAndroid TV needs a complete D-pad-first product flow and different performance defaults from phones.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [dist/index.html:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/index.html#L1)\n- [dist/app.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/app.js#L1)\n- [dist/style.css:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/style.css#L1)\n- [src-tauri/tauri.conf.json:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/tauri.conf.json#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add Leanback launcher, banner and touchscreen-not-required declarations to reproducible manifest customization.\n- [ ] Implement TV-specific focus graph, visible focus, Back behavior, large targets and overscan-safe layout.\n- [ ] Make pairing/authentication/settings/release/disconnect possible without mouse, touch or F-keys.\n- [ ] Default to native resolution/no FG and conservative inference until sustained-load qualification.\n- [ ] Test HDMI hotplug, 59.94/60 Hz, sleep, Bluetooth reconnect and low-memory dongles.\n\n## Dependencies\n\n- T12: #13 — Build Android native shell, MediaCodec surfaces and lifecycle integration\n- T13: #14 — Implement Android pointer lock, physical keyboard mapping and fixed-landscape gameplay\n- T23: #24 — Add controller backends, touch fallback and input-source arbitration\n\n## Acceptance criteria\n\n- [ ] All onboarding and gameplay-management flows work with a basic remote.\n- [ ] Actual TV hardware streams audio/video and recovers from sleep and HDMI route changes.\n- [ ] Device capability report distinguishes panel resolution from decode/processing limits.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nReuse Android basic media mode; optional effects disable independently without breaking navigation.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T15",
+      "title": "Implement iOS/iPadOS native media host, Metal and sandbox lifecycle",
+      "priority": "P0",
+      "phase": 3,
+      "size": "L",
+      "deps": [
+        "T02",
+        "T03",
+        "T04",
+        "T10"
+      ],
+      "paths": [
+        "crates/openps-video/src/vt.rs",
+        "crates/openps-video/build.rs",
+        "crates/openps-metal/build.rs",
+        "crates/openps-audio/build.rs",
+        "src-tauri/src/video.rs",
+        "src-tauri/src/lib.rs"
+      ],
+      "problem": "Apple media APIs offer reuse, but current AppKit surfaces, framework guards and storage paths are not iOS-compatible.",
+      "steps": [
+        "Create reproducible Apple generated project and Swift/native platform plugin.",
+        "Adapt VideoToolbox/Metal to UIView/CAMetalLayer and per-window scene timing; remove NSView/NSScreen assumptions.",
+        "Availability-gate MetalFX and retain built-in/native rendering fallback.",
+        "Integrate AVAudioSession, foreground/background, interruption and surface cancellation with epochs.",
+        "Handle local-network access, manual console addressing, sign-in callback and sandbox directories."
+      ],
+      "accept": [
+        "Physical iPhone and iPad stream known H.264/HEVC clips and real-console content with audio.",
+        "Suspend/resume, interruptions, memory pressure and view replacement do not retain obsolete GPU/decoder state.",
+        "Device and simulator compile checks are separate from actual hardware qualification."
+      ],
+      "rollback": "Keep optional MetalFX/inference off on unsupported devices; native VideoToolbox/Metal playback is the baseline.",
+      "number": 16,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/16",
+      "body": "Parent specification: #1\n\n**Task:** T15 · **Priority:** P0 · **Phase:** 3 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nApple media APIs offer reuse, but current AppKit surfaces, framework guards and storage paths are not iOS-compatible.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/vt.rs:436](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/vt.rs#L436)\n- [crates/openps-video/build.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/build.rs#L1)\n- [crates/openps-metal/build.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/build.rs#L1)\n- [crates/openps-audio/build.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-audio/build.rs#L1)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Create reproducible Apple generated project and Swift/native platform plugin.\n- [ ] Adapt VideoToolbox/Metal to UIView/CAMetalLayer and per-window scene timing; remove NSView/NSScreen assumptions.\n- [ ] Availability-gate MetalFX and retain built-in/native rendering fallback.\n- [ ] Integrate AVAudioSession, foreground/background, interruption and surface cancellation with epochs.\n- [ ] Handle local-network access, manual console addressing, sign-in callback and sandbox directories.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T10: #11 — Port Opus decoding and audio output with independent A/V clock policy\n\n## Acceptance criteria\n\n- [ ] Physical iPhone and iPad stream known H.264/HEVC clips and real-console content with audio.\n- [ ] Suspend/resume, interruptions, memory pressure and view replacement do not retain obsolete GPU/decoder state.\n- [ ] Device and simulator compile checks are separate from actual hardware qualification.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep optional MetalFX/inference off on unsupported devices; native VideoToolbox/Metal playback is the baseline.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T16",
+      "title": "Implement iOS/iPadOS keyboard, relative mouse capture and landscape controller",
+      "priority": "P0",
+      "phase": 3,
+      "size": "M",
+      "deps": [
+        "T11",
+        "T15"
+      ],
+      "paths": [
+        "crates/openps-input/src/engine.rs",
+        "src-tauri/src/input.rs",
+        "dist/app.js",
+        "dist/style.css"
+      ],
+      "problem": "UIKit pointer-lock preference and GameController input need native integration and per-device verification; desktop cursor warping is not portable.",
+      "steps": [
+        "Add GCKeyboard/GCMouse connection and event handlers, normalized through the shared input host.",
+        "Implement prefersPointerLocked/update hooks in the gameplay view controller and report observed capture/focus state.",
+        "Add release control and neutralize held state on modal, scene deactivation, mouse disconnect and session close.",
+        "Declare landscape orientations and availability-gated scene lock preferences; support resized iPad windows with landscape content.",
+        "Validate iPhone and iPad separately and expose unsupported hardware/OS combinations honestly."
+      ],
+      "accept": [
+        "Qualified hardware passes sustained relative movement, keyboard transitions, release/reacquire and no-camera-jump tests.",
+        "System modals and navigation can release capture without stuck input.",
+        "Landscape behavior is documented for fullscreen and resizable windows; UIRequiresFullScreen is not the sole mechanism."
+      ],
+      "rollback": "Fallback to controller/touch or released pointer navigation when native capture is unavailable; do not claim universal iPhone lock.",
+      "number": 17,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/17",
+      "body": "Parent specification: #1\n\n**Task:** T16 · **Priority:** P0 · **Phase:** 3 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nUIKit pointer-lock preference and GameController input need native integration and per-device verification; desktop cursor warping is not portable.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-input/src/engine.rs:36](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/engine.rs#L36)\n- [src-tauri/src/input.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/input.rs#L1)\n- [dist/app.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/app.js#L1)\n- [dist/style.css:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/style.css#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add GCKeyboard/GCMouse connection and event handlers, normalized through the shared input host.\n- [ ] Implement prefersPointerLocked/update hooks in the gameplay view controller and report observed capture/focus state.\n- [ ] Add release control and neutralize held state on modal, scene deactivation, mouse disconnect and session close.\n- [ ] Declare landscape orientations and availability-gated scene lock preferences; support resized iPad windows with landscape content.\n- [ ] Validate iPhone and iPad separately and expose unsupported hardware/OS combinations honestly.\n\n## Dependencies\n\n- T11: #12 — Extract portable input host and implement Windows/Linux capture adapters\n- T15: #16 — Implement iOS/iPadOS native media host, Metal and sandbox lifecycle\n\n## Acceptance criteria\n\n- [ ] Qualified hardware passes sustained relative movement, keyboard transitions, release/reacquire and no-camera-jump tests.\n- [ ] System modals and navigation can release capture without stuck input.\n- [ ] Landscape behavior is documented for fullscreen and resizable windows; UIRequiresFullScreen is not the sole mechanism.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nFallback to controller/touch or released pointer navigation when native capture is unavailable; do not claim universal iPhone lock.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T17",
+      "title": "Port spatial upscaling and color pipeline across GPU backends",
+      "priority": "P1",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T06",
+        "T07",
+        "T15"
+      ],
+      "paths": [
+        "crates/openps-metal/src/shaders.rs",
+        "crates/openps-metal/src/gpu.rs",
+        "crates/openps-metal/tests/fsr_compare.rs",
+        "crates/openps-metal/tests/video_quality.rs"
+      ],
+      "problem": "Existing EASU/RCAS and finishing effects must retain quality across Vulkan, DirectX, GL/GLES and Metal.",
+      "steps": [
+        "Write backend-neutral reference math for EASU/RCAS, sharpness, bounds and color conversions.",
+        "Port kernels to shared WGSL and qualified GLSL/fragment variants with pipeline caching.",
+        "Prefer NV12/P010 conversion on GPU; make SDR range/matrix and linear-light boundaries explicit.",
+        "Clamp requested scale to drawable size and memory/texture limits; provide native/bilinear fallback.",
+        "Add HDR only behind separately tested color/format capabilities."
+      ],
+      "accept": [
+        "Golden patterns and real clips match declared image tolerances on each backend.",
+        "Text, edges and black levels do not regress; unsupported filters explain fallback.",
+        "GPU cost and working set are reported at 720p/1080p/4K output targets."
+      ],
+      "rollback": "Disable a failing filter independently; preserve native frame display and prior user preference.",
+      "number": 18,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/18",
+      "body": "Parent specification: #1\n\n**Task:** T17 · **Priority:** P1 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nExisting EASU/RCAS and finishing effects must retain quality across Vulkan, DirectX, GL/GLES and Metal.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/shaders.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/shaders.rs#L1)\n- [crates/openps-metal/src/gpu.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/gpu.rs#L1)\n- [crates/openps-metal/tests/fsr_compare.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/tests/fsr_compare.rs#L1)\n- [crates/openps-metal/tests/video_quality.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/tests/video_quality.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Write backend-neutral reference math for EASU/RCAS, sharpness, bounds and color conversions.\n- [ ] Port kernels to shared WGSL and qualified GLSL/fragment variants with pipeline caching.\n- [ ] Prefer NV12/P010 conversion on GPU; make SDR range/matrix and linear-light boundaries explicit.\n- [ ] Clamp requested scale to drawable size and memory/texture limits; provide native/bilinear fallback.\n- [ ] Add HDR only behind separately tested color/format capabilities.\n\n## Dependencies\n\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n- T07: #8 — Add explicit OpenGL and OpenGL ES compatibility rendering\n- T15: #16 — Implement iOS/iPadOS native media host, Metal and sandbox lifecycle\n\n## Acceptance criteria\n\n- [ ] Golden patterns and real clips match declared image tolerances on each backend.\n- [ ] Text, edges and black levels do not regress; unsupported filters explain fallback.\n- [ ] GPU cost and working set are reported at 720p/1080p/4K output targets.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nDisable a failing filter independently; preserve native frame display and prior user preference.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T18",
+      "title": "Port video-derived frame generation with cuts, confidence and backend parity",
+      "priority": "P1",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T04",
+        "T06",
+        "T07",
+        "T17",
+        "T19"
+      ],
+      "paths": [
+        "crates/openps-metal/src/shaders.rs",
+        "crates/openps-metal/src/gpu.rs",
+        "crates/openps-metal/src/camera.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "crates/openps-metal/tests/real_clip.rs"
+      ],
+      "problem": "Remote video lacks game-engine depth and motion vectors; FG must use the existing video-motion approach and disclose latency/artifact tradeoffs.",
+      "steps": [
+        "Specify and port luma pyramid/motion search/warp/camera compensation from current implementation.",
+        "Add flow consistency, disocclusion confidence and conservative HUD/border handling.",
+        "Implement separate interpolation and extrapolation modes, initially qualified at 2x.",
+        "Add fast hard-cut detection and invalidate history on cut, gap, stall, format or epoch changes.",
+        "Qualify compute-capable GL/GLES separately; report unavailable on basic devices rather than emulating bad FG."
+      ],
+      "accept": [
+        "No generated frame crosses a reset/cut or feeds back into decode/semantic inference.",
+        "Quality report includes held-out real clips, fast pans, UI, particles, flashes and failed flow.",
+        "Report actual generated/real/presented FPS and latency; never call this standard FSR 3 or claim reduced game input latency."
+      ],
+      "rollback": "Runtime disable or repeat latest real frame when confidence, latency or GPU budget fails.",
+      "number": 19,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/19",
+      "body": "Parent specification: #1\n\n**Task:** T18 · **Priority:** P1 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nRemote video lacks game-engine depth and motion vectors; FG must use the existing video-motion approach and disclose latency/artifact tradeoffs.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/shaders.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/shaders.rs#L1)\n- [crates/openps-metal/src/gpu.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/gpu.rs#L1)\n- [crates/openps-metal/src/camera.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/camera.rs#L1)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [crates/openps-metal/tests/real_clip.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/tests/real_clip.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Specify and port luma pyramid/motion search/warp/camera compensation from current implementation.\n- [ ] Add flow consistency, disocclusion confidence and conservative HUD/border handling.\n- [ ] Implement separate interpolation and extrapolation modes, initially qualified at 2x.\n- [ ] Add fast hard-cut detection and invalidate history on cut, gap, stall, format or epoch changes.\n- [ ] Qualify compute-capable GL/GLES separately; report unavailable on basic devices rather than emulating bad FG.\n\n## Dependencies\n\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n- T07: #8 — Add explicit OpenGL and OpenGL ES compatibility rendering\n- T17: #18 — Port spatial upscaling and color pipeline across GPU backends\n- T19: #20 — Implement display-driven pacing, thermal budgets and end-to-end latency telemetry\n\n## Acceptance criteria\n\n- [ ] No generated frame crosses a reset/cut or feeds back into decode/semantic inference.\n- [ ] Quality report includes held-out real clips, fast pans, UI, particles, flashes and failed flow.\n- [ ] Report actual generated/real/presented FPS and latency; never call this standard FSR 3 or claim reduced game input latency.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nRuntime disable or repeat latest real frame when confidence, latency or GPU budget fails.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T19",
+      "title": "Implement display-driven pacing, thermal budgets and end-to-end latency telemetry",
+      "priority": "P1",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T01",
+        "T04",
+        "T06"
+      ],
+      "paths": [
+        "crates/openps-metal/src/timeline.rs",
+        "crates/openps-metal/src/ladder.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "src-tauri/src/video.rs",
+        "dist/app.js"
+      ],
+      "problem": "Desktop spin/sleep and static quality policy need adaptation for multiple refresh rates, mobile power and observable latency.",
+      "steps": [
+        "Add native presentation clocks/signals and actual display-change handling.",
+        "Track arrival/decode/queue/GPU/scheduled/observed-present timestamps with validity flags.",
+        "Support cadence-aware 30/60 content on 59.94/60/90/120/144 Hz and VRR without pretending every refresh is new content.",
+        "Add user-visible quality versus power policy and thermal hysteresis that reduces FG/upscale/inference work before unstable frame queues.",
+        "Separate network, intentional interpolation and presentation delays; retain old requested settings during temporary fallback."
+      ],
+      "accept": [
+        "Synthetic timing traces never go backward or grow playout unbounded.",
+        "Reference targets and 30-minute mobile thermal soak pass or produce documented lower capability tiers.",
+        "Metrics never label CPU submit time as GPU completion or estimated present as observed present."
+      ],
+      "rollback": "Use conservative vsync/native resolution policy when timing/thermal APIs are unavailable.",
+      "number": 20,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/20",
+      "body": "Parent specification: #1\n\n**Task:** T19 · **Priority:** P1 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nDesktop spin/sleep and static quality policy need adaptation for multiple refresh rates, mobile power and observable latency.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/timeline.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/timeline.rs#L1)\n- [crates/openps-metal/src/ladder.rs:22](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/ladder.rs#L22)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [dist/app.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/app.js#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add native presentation clocks/signals and actual display-change handling.\n- [ ] Track arrival/decode/queue/GPU/scheduled/observed-present timestamps with validity flags.\n- [ ] Support cadence-aware 30/60 content on 59.94/60/90/120/144 Hz and VRR without pretending every refresh is new content.\n- [ ] Add user-visible quality versus power policy and thermal hysteresis that reduces FG/upscale/inference work before unstable frame queues.\n- [ ] Separate network, intentional interpolation and presentation delays; retain old requested settings during temporary fallback.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n\n## Acceptance criteria\n\n- [ ] Synthetic timing traces never go backward or grow playout unbounded.\n- [ ] Reference targets and 30-minute mobile thermal soak pass or produce documented lower capability tiers.\n- [ ] Metrics never label CPU submit time as GPU completion or estimated present as observed present.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nUse conservative vsync/native resolution policy when timing/thermal APIs are unavailable.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T20",
+      "title": "Make scene inference portable and model artifacts reproducible",
+      "priority": "P1",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T03",
+        "T12",
+        "T15"
+      ],
+      "paths": [
+        "crates/openps-scene/src/lib.rs",
+        "crates/openps-scene/src/encoder.rs",
+        "crates/openps-scene/src/service.rs",
+        "tools/scene-context/scenelab/export.py",
+        "tools/scene-context/scenelab/pictures.py"
+      ],
+      "problem": "CoreML/CVPixelBuffer coupling and absent model assets prevent cross-platform scene detection.",
+      "steps": [
+        "Add ImageEncoder abstraction and portable sampled-frame/tensor input while retaining CoreML adapter.",
+        "Export ONNX equivalents and validate CPU baseline before selecting accelerated providers.",
+        "Create content-hashed manifest for weights, tensor schemas, preprocessing, layout, licenses and probe compatibility.",
+        "Replace mtime/size-only cache identity and implement atomic compile/load/cache cleanup.",
+        "Bundle or reproducibly fetch artifacts with explicit optional download UI; keep gameplay usable without models."
+      ],
+      "accept": [
+        "Identical input fixtures yield matching embeddings/probabilities within documented tolerances across runtimes.",
+        "Clean installation either has valid model assets or clearly reports unavailable; no silent network fetch.",
+        "Unsupported execution provider falls back without blocking decode/input."
+      ],
+      "rollback": "Retain current Apple encoder and manual mapping while portable runtime/models are unqualified.",
+      "number": 21,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/21",
+      "body": "Parent specification: #1\n\n**Task:** T20 · **Priority:** P1 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nCoreML/CVPixelBuffer coupling and absent model assets prevent cross-platform scene detection.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-scene/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/lib.rs#L1)\n- [crates/openps-scene/src/encoder.rs:61](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/encoder.rs#L61)\n- [crates/openps-scene/src/service.rs:126](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/service.rs#L126)\n- [tools/scene-context/scenelab/export.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/export.py#L1)\n- [tools/scene-context/scenelab/pictures.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/pictures.py#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add ImageEncoder abstraction and portable sampled-frame/tensor input while retaining CoreML adapter.\n- [ ] Export ONNX equivalents and validate CPU baseline before selecting accelerated providers.\n- [ ] Create content-hashed manifest for weights, tensor schemas, preprocessing, layout, licenses and probe compatibility.\n- [ ] Replace mtime/size-only cache identity and implement atomic compile/load/cache cleanup.\n- [ ] Bundle or reproducibly fetch artifacts with explicit optional download UI; keep gameplay usable without models.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T12: #13 — Build Android native shell, MediaCodec surfaces and lifecycle integration\n- T15: #16 — Implement iOS/iPadOS native media host, Metal and sandbox lifecycle\n\n## Acceptance criteria\n\n- [ ] Identical input fixtures yield matching embeddings/probabilities within documented tolerances across runtimes.\n- [ ] Clean installation either has valid model assets or clearly reports unavailable; no silent network fetch.\n- [ ] Unsupported execution provider falls back without blocking decode/input.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nRetain current Apple encoder and manual mapping while portable runtime/models are unqualified.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T21",
+      "title": "Prevent stale scene publication and add inference recovery/freshness state",
+      "priority": "P0",
+      "phase": 1,
+      "size": "M",
+      "deps": [
+        "T03"
+      ],
+      "paths": [
+        "crates/openps-scene/src/service.rs",
+        "crates/openps-input/src/scene.rs",
+        "crates/openps-input/src/engine.rs",
+        "crates/openps-scene/tests/service.rs"
+      ],
+      "problem": "Current running() recheck cannot distinguish a picture from an old session/profile after a rapid off/on or reconnect; repeated inference failures can leave stale context visible.",
+      "steps": [
+        "Add session/profile/model generations to samples and results; reject mismatches immediately before publication.",
+        "Clear pending sample, action queue and filter state on generation changes.",
+        "Add sample-age limit, failure counters, bounded retry/backoff and explicit degraded/unavailable state.",
+        "Publish coherent scene/confidence/age/generation snapshot without blocking the input loop.",
+        "Make model-load failures retryable and rate-limit error logs."
+      ],
+      "accept": [
+        "A deliberately delayed inference cannot publish after off/on, profile change, reconnect or shutdown.",
+        "Repeated errors expire the old scene and select safe/manual fallback.",
+        "One pending sample remains the bound and model load never blocks app exit indefinitely."
+      ],
+      "rollback": "Disable automatic mapping on service failure while preserving user-selected/manual layer.",
+      "number": 22,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/22",
+      "body": "Parent specification: #1\n\n**Task:** T21 · **Priority:** P0 · **Phase:** 1 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nCurrent running() recheck cannot distinguish a picture from an old session/profile after a rapid off/on or reconnect; repeated inference failures can leave stale context visible.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-scene/src/service.rs:126](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/service.rs#L126)\n- [crates/openps-input/src/scene.rs:199](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/scene.rs#L199)\n- [crates/openps-input/src/engine.rs:36](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/engine.rs#L36)\n- [crates/openps-scene/tests/service.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/tests/service.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add session/profile/model generations to samples and results; reject mismatches immediately before publication.\n- [ ] Clear pending sample, action queue and filter state on generation changes.\n- [ ] Add sample-age limit, failure counters, bounded retry/backoff and explicit degraded/unavailable state.\n- [ ] Publish coherent scene/confidence/age/generation snapshot without blocking the input loop.\n- [ ] Make model-load failures retryable and rate-limit error logs.\n\n## Dependencies\n\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n\n## Acceptance criteria\n\n- [ ] A deliberately delayed inference cannot publish after off/on, profile change, reconnect or shutdown.\n- [ ] Repeated errors expire the old scene and select safe/manual fallback.\n- [ ] One pending sample remains the bound and model load never blocks app exit indefinitely.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nDisable automatic mapping on service failure while preserving user-selected/manual layer.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T22",
+      "title": "Harden scene probe validation and calibrate mapping decisions",
+      "priority": "P1",
+      "phase": 4,
+      "size": "M",
+      "deps": [
+        "T21",
+        "T24"
+      ],
+      "paths": [
+        "crates/openps-scene/src/probe.rs",
+        "crates/openps-scene/src/filter.rs",
+        "crates/openps-input/src/scene.rs",
+        "crates/openps-input/src/engine.rs"
+      ],
+      "problem": "Probe validation and argmax-based scene selection need explicit invalid-input and uncertainty policy before mobile model variants are introduced.",
+      "steps": [
+        "Reject malformed class sets, nonfinite coefficients/embeddings, bad dimensions and invalid temperature/scales.",
+        "Precompute standardized coefficients and reusable inference buffers after correctness tests.",
+        "Calibrate probabilities on held-out data and add margin/entropy abstention with bounded hold/fallback.",
+        "Version per-game filter parameters while retaining current 12-second exit-lock behavior as compatibility profile.",
+        "Make cutscene-to-menu mapping and manual override explicit; release old bindings safely on layer transitions."
+      ],
+      "accept": [
+        "Malformed models/outputs never panic or publish invalid distributions.",
+        "Held-key layer switches cannot create stuck/duplicate controller actions.",
+        "Threshold selection uses validation data and final held-out switch/error metrics improve or preserve baseline."
+      ],
+      "rollback": "Retain compatibility filter profile and manual layer override; do not ship new thresholds without evaluation evidence.",
+      "number": 23,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/23",
+      "body": "Parent specification: #1\n\n**Task:** T22 · **Priority:** P1 · **Phase:** 4 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nProbe validation and argmax-based scene selection need explicit invalid-input and uncertainty policy before mobile model variants are introduced.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-scene/src/probe.rs:82](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/probe.rs#L82)\n- [crates/openps-scene/src/filter.rs:72](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/filter.rs#L72)\n- [crates/openps-input/src/scene.rs:199](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/scene.rs#L199)\n- [crates/openps-input/src/engine.rs:36](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-input/src/engine.rs#L36)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Reject malformed class sets, nonfinite coefficients/embeddings, bad dimensions and invalid temperature/scales.\n- [ ] Precompute standardized coefficients and reusable inference buffers after correctness tests.\n- [ ] Calibrate probabilities on held-out data and add margin/entropy abstention with bounded hold/fallback.\n- [ ] Version per-game filter parameters while retaining current 12-second exit-lock behavior as compatibility profile.\n- [ ] Make cutscene-to-menu mapping and manual override explicit; release old bindings safely on layer transitions.\n\n## Dependencies\n\n- T21: #22 — Prevent stale scene publication and add inference recovery/freshness state\n- T24: #25 — Build game-disjoint scene evaluation with real action traces\n\n## Acceptance criteria\n\n- [ ] Malformed models/outputs never panic or publish invalid distributions.\n- [ ] Held-key layer switches cannot create stuck/duplicate controller actions.\n- [ ] Threshold selection uses validation data and final held-out switch/error metrics improve or preserve baseline.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nRetain compatibility filter profile and manual layer override; do not ship new thresholds without evaluation evidence.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T23",
+      "title": "Add controller backends, touch fallback and input-source arbitration",
+      "priority": "P0",
+      "phase": 3,
+      "size": "L",
+      "deps": [
+        "T11"
+      ],
+      "paths": [
+        "crates/openps-gamepad/src/lib.rs",
+        "crates/openps-gamepad/src/hid.rs",
+        "crates/openps-gamepad/src/map.rs",
+        "crates/openps-gamepad/src/mode.rs",
+        "src-tauri/src/pads.rs"
+      ],
+      "problem": "TV/mobile usability depends on controllers; raw DualSense capabilities cannot be assumed through all platform APIs.",
+      "steps": [
+        "Implement Windows/Linux and native Android/GameController Apple adapters using existing PadSource/PadSink contracts.",
+        "Support standard buttons/sticks first and enumerate gyro/touchpad/battery/rumble/trigger capabilities separately.",
+        "Add minimal touch controls/release menu for phone use without hardware.",
+        "Define single-owner arbitration among pad, keyboard/mouse and touch; neutralize previous source on handoff.",
+        "Handle hotplug, reconnect, multiple controllers and identity changes without stale state."
+      ],
+      "accept": [
+        "Basic console control works on each qualified platform with documented supported devices.",
+        "Unsupported advanced haptics are reported rather than silently promised.",
+        "Hotplug/source handoff tests show no held buttons, lost release or duplicate input."
+      ],
+      "rollback": "Keep basic controller functionality when device-specific extras fail; user can choose source manually.",
+      "number": 24,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/24",
+      "body": "Parent specification: #1\n\n**Task:** T23 · **Priority:** P0 · **Phase:** 3 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nTV/mobile usability depends on controllers; raw DualSense capabilities cannot be assumed through all platform APIs.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-gamepad/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-gamepad/src/lib.rs#L1)\n- [crates/openps-gamepad/src/hid.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-gamepad/src/hid.rs#L1)\n- [crates/openps-gamepad/src/map.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-gamepad/src/map.rs#L1)\n- [crates/openps-gamepad/src/mode.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-gamepad/src/mode.rs#L1)\n- [src-tauri/src/pads.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/pads.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Implement Windows/Linux and native Android/GameController Apple adapters using existing PadSource/PadSink contracts.\n- [ ] Support standard buttons/sticks first and enumerate gyro/touchpad/battery/rumble/trigger capabilities separately.\n- [ ] Add minimal touch controls/release menu for phone use without hardware.\n- [ ] Define single-owner arbitration among pad, keyboard/mouse and touch; neutralize previous source on handoff.\n- [ ] Handle hotplug, reconnect, multiple controllers and identity changes without stale state.\n\n## Dependencies\n\n- T11: #12 — Extract portable input host and implement Windows/Linux capture adapters\n\n## Acceptance criteria\n\n- [ ] Basic console control works on each qualified platform with documented supported devices.\n- [ ] Unsupported advanced haptics are reported rather than silently promised.\n- [ ] Hotplug/source handoff tests show no held buttons, lost release or duplicate input.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep basic controller functionality when device-specific extras fail; user can choose source manually.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T24",
+      "title": "Build game-disjoint scene evaluation with real action traces",
+      "priority": "P1",
+      "phase": 0,
+      "size": "M",
+      "deps": [
+        "T01"
+      ],
+      "paths": [
+        "tools/scene-context/scenelab/evaluate.py",
+        "tools/scene-context/scenelab/filtersim.py",
+        "tools/scene-context/scenelab/data.py",
+        "tools/scene-context/dataset/recordings.json",
+        "crates/openps-scene/tests/replay.rs"
+      ],
+      "problem": "Current recording holdouts and simulated actions do not fully establish generalization or real mapping-transition safety.",
+      "steps": [
+        "Add game/session/source-clip metadata, split hashes and leakage checks.",
+        "Record real mapped action times and annotated transitions with user-controlled local capture.",
+        "Keep a final untouched test set and compare baseline, calibration and per-game filter variants.",
+        "Report macro-F1, class recall, ECE, false switches/minute, transition p95, staleness and uncertainty coverage.",
+        "Export deterministic Rust replay fixtures for involuntary transitions, repeated failed presses and network/lifecycle gaps."
+      ],
+      "accept": [
+        "No adjacent/alternate-encode source material crosses train/test splits.",
+        "Report distinguishes simulated and recorded actions and identifies unknown games.",
+        "Rust/Python reference parity and baseline replay remain passing."
+      ],
+      "rollback": "Evaluation changes are additive; do not replace existing baselines or train on the final test set.",
+      "number": 25,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/25",
+      "body": "Parent specification: #1\n\n**Task:** T24 · **Priority:** P1 · **Phase:** 0 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nCurrent recording holdouts and simulated actions do not fully establish generalization or real mapping-transition safety.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [tools/scene-context/scenelab/evaluate.py:41](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/evaluate.py#L41)\n- [tools/scene-context/scenelab/filtersim.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/filtersim.py#L1)\n- [tools/scene-context/scenelab/data.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/data.py#L1)\n- [tools/scene-context/dataset/recordings.json:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/dataset/recordings.json#L1)\n- [crates/openps-scene/tests/replay.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/tests/replay.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add game/session/source-clip metadata, split hashes and leakage checks.\n- [ ] Record real mapped action times and annotated transitions with user-controlled local capture.\n- [ ] Keep a final untouched test set and compare baseline, calibration and per-game filter variants.\n- [ ] Report macro-F1, class recall, ECE, false switches/minute, transition p95, staleness and uncertainty coverage.\n- [ ] Export deterministic Rust replay fixtures for involuntary transitions, repeated failed presses and network/lifecycle gaps.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n\n## Acceptance criteria\n\n- [ ] No adjacent/alternate-encode source material crosses train/test splits.\n- [ ] Report distinguishes simulated and recorded actions and identifies unknown games.\n- [ ] Rust/Python reference parity and baseline replay remain passing.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nEvaluation changes are additive; do not replace existing baselines or train on the final test set.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T25",
+      "title": "Develop a mobile scene-model tier and adaptive sampling policy",
+      "priority": "P2",
+      "phase": 4,
+      "size": "R",
+      "deps": [
+        "T20",
+        "T24",
+        "T22",
+        "T19"
+      ],
+      "paths": [
+        "tools/scene-context/scenelab/pictures.py",
+        "tools/scene-context/scenelab/features.py",
+        "tools/scene-context/scenelab/export.py",
+        "crates/openps-scene/src/service.rs"
+      ],
+      "problem": "Two encoders totaling 2048 features may be unnecessarily expensive on low-power devices; current 2 Hz schedule is fixed.",
+      "steps": [
+        "Ablate full model, MobileCLIP-only, distilled student, lower resolution and FP16/INT8 variants.",
+        "Retrain probes for every changed representation and verify tensor/preprocessing parity.",
+        "Benchmark cold load, p95 inference, memory and sustained thermal effect alongside decode/FG.",
+        "Use bounded action-triggered sample bursts and uncertainty-triggered larger inference, with thermal slowdown.",
+        "Preserve prior crop experiments as evidence; require a controlled new gain before adding HUD crops."
+      ],
+      "accept": [
+        "Chosen tier meets held-out false-switch/accuracy gates and memory budget on target phones/TV.",
+        "No zero-filled substitute embedding is accepted as the original model.",
+        "Optional ML cannot destabilize decode/audio/input and degrades to manual mapping."
+      ],
+      "rollback": "Select original model on capable hardware or disable automatic inference when compact models fail quality gates.",
+      "number": 26,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/26",
+      "body": "Parent specification: #1\n\n**Task:** T25 · **Priority:** P2 · **Phase:** 4 · **Estimate:** R (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nTwo encoders totaling 2048 features may be unnecessarily expensive on low-power devices; current 2 Hz schedule is fixed.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [tools/scene-context/scenelab/pictures.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/pictures.py#L1)\n- [tools/scene-context/scenelab/features.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/features.py#L1)\n- [tools/scene-context/scenelab/export.py:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tools/scene-context/scenelab/export.py#L1)\n- [crates/openps-scene/src/service.rs:126](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/src/service.rs#L126)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Ablate full model, MobileCLIP-only, distilled student, lower resolution and FP16/INT8 variants.\n- [ ] Retrain probes for every changed representation and verify tensor/preprocessing parity.\n- [ ] Benchmark cold load, p95 inference, memory and sustained thermal effect alongside decode/FG.\n- [ ] Use bounded action-triggered sample bursts and uncertainty-triggered larger inference, with thermal slowdown.\n- [ ] Preserve prior crop experiments as evidence; require a controlled new gain before adding HUD crops.\n\n## Dependencies\n\n- T20: #21 — Make scene inference portable and model artifacts reproducible\n- T24: #25 — Build game-disjoint scene evaluation with real action traces\n- T22: #23 — Harden scene probe validation and calibrate mapping decisions\n- T19: #20 — Implement display-driven pacing, thermal budgets and end-to-end latency telemetry\n\n## Acceptance criteria\n\n- [ ] Chosen tier meets held-out false-switch/accuracy gates and memory budget on target phones/TV.\n- [ ] No zero-filled substitute embedding is accepted as the original model.\n- [ ] Optional ML cannot destabilize decode/audio/input and degrades to manual mapping.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nSelect original model on capable hardware or disable automatic inference when compact models fail quality gates.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T26",
+      "title": "Optimize decode scheduling, texture copies and duplicate detection from measured traces",
+      "priority": "P1",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T01",
+        "T03",
+        "T06"
+      ],
+      "paths": [
+        "crates/openps-video/src/vt.rs",
+        "crates/openps-video/src/media.rs",
+        "crates/openps-metal/src/renderer.rs",
+        "crates/openps-metal/src/gpu.rs"
+      ],
+      "problem": "Per-decode VT asynchronous waits, BGRA conversion and CPU IOSurface sampling are concrete optimization candidates; the renderer test-helper wait must not be mistaken for a hot-path stall.",
+      "steps": [
+        "Remove per-frame whole-session decode waits through bounded asynchronous completion ownership.",
+        "Compare NV12 GPU conversion with BGRA and compare zero-copy with application-owned ring copy.",
+        "Reuse fixed duplicate-signature storage; evaluate GPU downsample/async tiny readback if CPU lock cost matters.",
+        "Bound texture ring memory by device budget and retain completion-safe leases.",
+        "Separate each optimization PR and keep counters for copy/lock/wait costs."
+      ],
+      "accept": [
+        "Before/after replay on identical hardware demonstrates lower stage latency or bandwidth without increasing frame age.",
+        "No decoder surface is reused early and reset/callback tests pass.",
+        "Do not remove test-helper or shutdown waits solely because their names appear in a search."
+      ],
+      "rollback": "Feature-flag asynchronous/import changes and retain proven one-copy path for problematic drivers.",
+      "number": 27,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/27",
+      "body": "Parent specification: #1\n\n**Task:** T26 · **Priority:** P1 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nPer-decode VT asynchronous waits, BGRA conversion and CPU IOSurface sampling are concrete optimization candidates; the renderer test-helper wait must not be mistaken for a hot-path stall.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-video/src/vt.rs:436](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/vt.rs#L436)\n- [crates/openps-video/src/media.rs:16](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/media.rs#L16)\n- [crates/openps-metal/src/renderer.rs:375](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/renderer.rs#L375)\n- [crates/openps-metal/src/gpu.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/gpu.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Remove per-frame whole-session decode waits through bounded asynchronous completion ownership.\n- [ ] Compare NV12 GPU conversion with BGRA and compare zero-copy with application-owned ring copy.\n- [ ] Reuse fixed duplicate-signature storage; evaluate GPU downsample/async tiny readback if CPU lock cost matters.\n- [ ] Bound texture ring memory by device budget and retain completion-safe leases.\n- [ ] Separate each optimization PR and keep counters for copy/lock/wait costs.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n\n## Acceptance criteria\n\n- [ ] Before/after replay on identical hardware demonstrates lower stage latency or bandwidth without increasing frame age.\n- [ ] No decoder surface is reused early and reset/callback tests pass.\n- [ ] Do not remove test-helper or shutdown waits solely because their names appear in a search.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nFeature-flag asynchronous/import changes and retain proven one-copy path for problematic drivers.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T27",
+      "title": "Optimize transport queues, assembly allocations and FEC without changing protocol behavior",
+      "priority": "P2",
+      "phase": 4,
+      "size": "L",
+      "deps": [
+        "T01",
+        "T03"
+      ],
+      "paths": [
+        "crates/openps-session/src/runner.rs",
+        "crates/openps-session/src/lib.rs",
+        "crates/openps-stream/src/video.rs",
+        "crates/openps-stream/src/stream.rs",
+        "crates/openps-fec/src/lib.rs"
+      ],
+      "problem": "Queue counts alone do not bound frame age, packet assembly copies each unit, and FEC work may be material under loss.",
+      "steps": [
+        "Instrument queue bytes/age, control latency and allocations before changing data structures.",
+        "Prioritize lifecycle/neutral input; coalesce only safe latest-value state while preserving button transitions and protocol history.",
+        "Audit inbound/notice counters on LinkClosed/failed sends and every dequeue; add invariant tests.",
+        "Pool packet/assembly scratch storage within existing resource limits.",
+        "Benchmark bounded matrix caching and CPU-feature-dispatched SIMD FEC against scalar oracle."
+      ],
+      "accept": [
+        "Replay/fuzz/resource tests are bit-equivalent and memory stays bounded under malicious/overloaded input.",
+        "Stop/release remains prompt under datagram flood.",
+        "Measured speedup is reported for realistic loss patterns; no performance-only test replaces correctness checks."
+      ],
+      "rollback": "Keep scalar FEC/reference assembly and disable optimizations independently when device-specific benefit is absent.",
+      "number": 28,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/28",
+      "body": "Parent specification: #1\n\n**Task:** T27 · **Priority:** P2 · **Phase:** 4 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nQueue counts alone do not bound frame age, packet assembly copies each unit, and FEC work may be material under loss.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-session/src/runner.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-session/src/runner.rs#L1)\n- [crates/openps-session/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-session/src/lib.rs#L1)\n- [crates/openps-stream/src/video.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-stream/src/video.rs#L1)\n- [crates/openps-stream/src/stream.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-stream/src/stream.rs#L1)\n- [crates/openps-fec/src/lib.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-fec/src/lib.rs#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Instrument queue bytes/age, control latency and allocations before changing data structures.\n- [ ] Prioritize lifecycle/neutral input; coalesce only safe latest-value state while preserving button transitions and protocol history.\n- [ ] Audit inbound/notice counters on LinkClosed/failed sends and every dequeue; add invariant tests.\n- [ ] Pool packet/assembly scratch storage within existing resource limits.\n- [ ] Benchmark bounded matrix caching and CPU-feature-dispatched SIMD FEC against scalar oracle.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n- T03: #4 — Define owned media frames, decoder interfaces and epoch-aware timestamps\n\n## Acceptance criteria\n\n- [ ] Replay/fuzz/resource tests are bit-equivalent and memory stays bounded under malicious/overloaded input.\n- [ ] Stop/release remains prompt under datagram flood.\n- [ ] Measured speedup is reported for realistic loss patterns; no performance-only test replaces correctness checks.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep scalar FEC/reference assembly and disable optimizations independently when device-specific benefit is absent.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T28",
+      "title": "Implement native storage, credential protection and migration-safe app paths",
+      "priority": "P0",
+      "phase": 1,
+      "size": "M",
+      "deps": [
+        "T02"
+      ],
+      "paths": [
+        "src-tauri/src/paths.rs",
+        "crates/openps-core/src/store.rs",
+        "crates/openps-psn/src/store.rs",
+        "src-tauri/src/lib.rs",
+        "scripts/install.sh"
+      ],
+      "problem": "Executable-relative writes and Unix-only permissions are unsuitable for Windows installation and signed mobile bundles.",
+      "steps": [
+        "Use platform application-data/cache directories by default and explicit desktop portable mode.",
+        "Add Windows private-file ACL/atomic replacement and platform-native credential stores; keep preferences separately versioned.",
+        "Migrate existing portable files by copying and verifying before switching location, with rollback metadata.",
+        "Ensure sign-out/removal clears correct credentials and no diagnostic exports contain secrets.",
+        "Update model cache, logs, keymaps and backup locations consistently across shell/install scripts."
+      ],
+      "accept": [
+        "Read-only install, interrupted write/migration, concurrent save and unavailable credential-store tests pass.",
+        "Permissions and atomic replacement are verified on Windows and Unix hosts.",
+        "No mobile path writes into application bundle; old profiles/pairings remain recoverable."
+      ],
+      "rollback": "Never delete original data until verified migration succeeds; support a documented return to prior storage path.",
+      "number": 29,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/29",
+      "body": "Parent specification: #1\n\n**Task:** T28 · **Priority:** P0 · **Phase:** 1 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nExecutable-relative writes and Unix-only permissions are unsuitable for Windows installation and signed mobile bundles.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [src-tauri/src/paths.rs:25](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/paths.rs#L25)\n- [crates/openps-core/src/store.rs:255](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-core/src/store.rs#L255)\n- [crates/openps-psn/src/store.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-psn/src/store.rs#L1)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n- [scripts/install.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/install.sh#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Use platform application-data/cache directories by default and explicit desktop portable mode.\n- [ ] Add Windows private-file ACL/atomic replacement and platform-native credential stores; keep preferences separately versioned.\n- [ ] Migrate existing portable files by copying and verifying before switching location, with rollback metadata.\n- [ ] Ensure sign-out/removal clears correct credentials and no diagnostic exports contain secrets.\n- [ ] Update model cache, logs, keymaps and backup locations consistently across shell/install scripts.\n\n## Dependencies\n\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n\n## Acceptance criteria\n\n- [ ] Read-only install, interrupted write/migration, concurrent save and unavailable credential-store tests pass.\n- [ ] Permissions and atomic replacement are verified on Windows and Unix hosts.\n- [ ] No mobile path writes into application bundle; old profiles/pairings remain recoverable.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nNever delete original data until verified migration succeeds; support a documented return to prior storage path.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T29",
+      "title": "Add capability-driven settings, mobile/TV layouts and truthful diagnostics",
+      "priority": "P1",
+      "phase": 3,
+      "size": "M",
+      "deps": [
+        "T04",
+        "T06",
+        "T11",
+        "T28"
+      ],
+      "paths": [
+        "crates/openps-core/src/types.rs",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/video.rs",
+        "dist/app.js",
+        "dist/index.html",
+        "dist/style.css",
+        "tests/display-settings.test.js"
+      ],
+      "problem": "Current UI is MetalFX/FSR-specific and uses legacy settings encodings that do not represent separate backend, decoder and algorithm choices.",
+      "steps": [
+        "Version settings and migrate existing engine/interpolator/frame_mode/frame_gen semantics.",
+        "Add requested/effective backend, decoder, upscaler, FG and inference tier plus failure reasons.",
+        "Expose copy route, unique/real/generated/presented FPS, queue age and timing validity.",
+        "Implement responsive landscape phone/tablet and remote-first TV layouts with accessible release and fallback messaging.",
+        "Replace misleading zero-latency/unsupported API wording while retaining legacy setting compatibility."
+      ],
+      "accept": [
+        "Old settings round-trip with equivalent intent and unknown future values fail safely.",
+        "Disabled options explain capability/runtime reasons; no false active state.",
+        "Frontend tests cover platform capability matrices, migration and keyboard/D-pad navigation."
+      ],
+      "rollback": "Keep prior requested preferences even when temporarily unavailable; migration can restore previous schema backup.",
+      "number": 30,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/30",
+      "body": "Parent specification: #1\n\n**Task:** T29 · **Priority:** P1 · **Phase:** 3 · **Estimate:** M (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nCurrent UI is MetalFX/FSR-specific and uses legacy settings encodings that do not represent separate backend, decoder and algorithm choices.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-core/src/types.rs:167](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-core/src/types.rs#L167)\n- [src-tauri/src/lib.rs:213](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/lib.rs#L213)\n- [src-tauri/src/video.rs:160](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/src/video.rs#L160)\n- [dist/app.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/app.js#L1)\n- [dist/index.html:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/index.html#L1)\n- [dist/style.css:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/dist/style.css#L1)\n- [tests/display-settings.test.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tests/display-settings.test.js#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Version settings and migrate existing engine/interpolator/frame_mode/frame_gen semantics.\n- [ ] Add requested/effective backend, decoder, upscaler, FG and inference tier plus failure reasons.\n- [ ] Expose copy route, unique/real/generated/presented FPS, queue age and timing validity.\n- [ ] Implement responsive landscape phone/tablet and remote-first TV layouts with accessible release and fallback messaging.\n- [ ] Replace misleading zero-latency/unsupported API wording while retaining legacy setting compatibility.\n\n## Dependencies\n\n- T04: #5 — Extract portable render timing, camera and adaptive-quality policy\n- T06: #7 — Implement shared Vulkan and D3D12 renderer with capabilities and resource budgets\n- T11: #12 — Extract portable input host and implement Windows/Linux capture adapters\n- T28: #29 — Implement native storage, credential protection and migration-safe app paths\n\n## Acceptance criteria\n\n- [ ] Old settings round-trip with equivalent intent and unknown future values fail safely.\n- [ ] Disabled options explain capability/runtime reasons; no false active state.\n- [ ] Frontend tests cover platform capability matrices, migration and keyboard/D-pad navigation.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep prior requested preferences even when temporarily unavailable; migration can restore previous schema backup.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T30",
+      "title": "Add cross-platform CI, GPU/media conformance and hardware release qualification",
+      "priority": "P0",
+      "phase": 1,
+      "size": "L",
+      "deps": [
+        "T01",
+        "T02"
+      ],
+      "paths": [
+        "Cargo.toml",
+        "scripts/build.sh",
+        "crates/openps-video/tests/pipeline.rs",
+        "crates/openps-metal/tests/replay.rs",
+        "crates/openps-scene/tests/reference.rs",
+        "tests/display-settings.test.js"
+      ],
+      "problem": "The snapshot has no tracked GitHub workflow directory; mocks and source assertions cannot qualify platform graphics/input behavior.",
+      "steps": [
+        "Add proposed .github/workflows for fmt/clippy/portable tests, desktop native builds, Android ABIs and iOS compile checks.",
+        "Pin Rust/SDK/NDK/Xcode and native dependencies; keep secrets out of PR jobs.",
+        "Add decoder/color/FG/lifecycle golden suites with explicit hardware runner capabilities.",
+        "Execute PS4/PS5 LAN/WAN matrix, input/orientation tests, mobile thermal and desktop soak plans as implementations land.",
+        "Store machine-readable environment/results and distinguish compile/mock/emulator/real hardware evidence."
+      ],
+      "accept": [
+        "Ordinary PR CI is deterministic with redistributable fixtures.",
+        "Release checklist requires actual platform playback/audio/input and tested fallback paths.",
+        "No hardware-unavailable job is silently treated as successful qualification."
+      ],
+      "rollback": "Keep optional hardware suites separately scheduled; failed optional features can be excluded from declared support but core platform failures block release.",
+      "number": 31,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/31",
+      "body": "Parent specification: #1\n\n**Task:** T30 · **Priority:** P0 · **Phase:** 1 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nThe snapshot has no tracked GitHub workflow directory; mocks and source assertions cannot qualify platform graphics/input behavior.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [Cargo.toml:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/Cargo.toml#L1)\n- [scripts/build.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/build.sh#L1)\n- [crates/openps-video/tests/pipeline.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/tests/pipeline.rs#L1)\n- [crates/openps-metal/tests/replay.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/tests/replay.rs#L1)\n- [crates/openps-scene/tests/reference.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-scene/tests/reference.rs#L1)\n- [tests/display-settings.test.js:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/tests/display-settings.test.js#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add proposed .github/workflows for fmt/clippy/portable tests, desktop native builds, Android ABIs and iOS compile checks.\n- [ ] Pin Rust/SDK/NDK/Xcode and native dependencies; keep secrets out of PR jobs.\n- [ ] Add decoder/color/FG/lifecycle golden suites with explicit hardware runner capabilities.\n- [ ] Execute PS4/PS5 LAN/WAN matrix, input/orientation tests, mobile thermal and desktop soak plans as implementations land.\n- [ ] Store machine-readable environment/results and distinguish compile/mock/emulator/real hardware evidence.\n\n## Dependencies\n\n- T01: #2 — Establish replay fixtures, performance baselines and hardware qualification matrix\n- T02: #3 — Remove platform compile blockers and introduce target-specific dependency boundaries\n\n## Acceptance criteria\n\n- [ ] Ordinary PR CI is deterministic with redistributable fixtures.\n- [ ] Release checklist requires actual platform playback/audio/input and tested fallback paths.\n- [ ] No hardware-unavailable job is silently treated as successful qualification.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nKeep optional hardware suites separately scheduled; failed optional features can be excluded from declared support but core platform failures block release.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T31",
+      "title": "Package, sign and document platform releases and model/license provenance",
+      "priority": "P1",
+      "phase": 5,
+      "size": "L",
+      "deps": [
+        "T08",
+        "T09",
+        "T12",
+        "T14",
+        "T15",
+        "T16",
+        "T28",
+        "T29",
+        "T30"
+      ],
+      "paths": [
+        "README.md",
+        "RELEASE_NOTES.md",
+        "docs/USAGE.md",
+        "src-tauri/tauri.conf.json",
+        "scripts/build.sh",
+        "scripts/install.sh",
+        "scripts/make-dmg.sh"
+      ],
+      "problem": "Distribution is currently macOS-centric and README has contradictory constants/license claims plus links outside the repository.",
+      "steps": [
+        "Add Windows installer, Linux chosen packages, Android app/TV artifacts and iOS archive/signing instructions.",
+        "Inventory code/model/codec/shader licenses and notices; resolve project license with maintainers before publishing binaries.",
+        "Document reproducible model acquisition, cache paths, platform capability/device matrix and unsupported combinations.",
+        "Replace sibling analysis links with in-repo architecture/test docs and reconcile README claims with actual tracked content.",
+        "Validate fresh install/update/uninstall, offline startup, crash diagnostics redaction and signing/release provenance."
+      ],
+      "accept": [
+        "Every advertised artifact installs and passes core real-device smoke tests.",
+        "No release claims an untested decoder/backend/lock mode; no private credential files enter packages.",
+        "Maintainer licensing decisions and model provenance are recorded before distribution."
+      ],
+      "rollback": "Use prerelease channels and preserve previous installers/settings rollback; this task does not authorize publishing unqualified builds.",
+      "number": 32,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/32",
+      "body": "Parent specification: #1\n\n**Task:** T31 · **Priority:** P1 · **Phase:** 5 · **Estimate:** L (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nDistribution is currently macOS-centric and README has contradictory constants/license claims plus links outside the repository.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [README.md:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/README.md#L1)\n- [RELEASE_NOTES.md:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/RELEASE_NOTES.md#L1)\n- [docs/USAGE.md:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/docs/USAGE.md#L1)\n- [src-tauri/tauri.conf.json:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/src-tauri/tauri.conf.json#L1)\n- [scripts/build.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/build.sh#L1)\n- [scripts/install.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/install.sh#L1)\n- [scripts/make-dmg.sh:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/scripts/make-dmg.sh#L1)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Add Windows installer, Linux chosen packages, Android app/TV artifacts and iOS archive/signing instructions.\n- [ ] Inventory code/model/codec/shader licenses and notices; resolve project license with maintainers before publishing binaries.\n- [ ] Document reproducible model acquisition, cache paths, platform capability/device matrix and unsupported combinations.\n- [ ] Replace sibling analysis links with in-repo architecture/test docs and reconcile README claims with actual tracked content.\n- [ ] Validate fresh install/update/uninstall, offline startup, crash diagnostics redaction and signing/release provenance.\n\n## Dependencies\n\n- T08: #9 — Implement Windows Media Foundation decode and native gameplay host\n- T09: #10 — Implement Linux decode, Wayland/X11 surfaces and distribution integration\n- T12: #13 — Build Android native shell, MediaCodec surfaces and lifecycle integration\n- T14: #15 — Deliver Android TV launcher, remote-first UX and low-resource qualification\n- T15: #16 — Implement iOS/iPadOS native media host, Metal and sandbox lifecycle\n- T16: #17 — Implement iOS/iPadOS keyboard, relative mouse capture and landscape controller\n- T28: #29 — Implement native storage, credential protection and migration-safe app paths\n- T29: #30 — Add capability-driven settings, mobile/TV layouts and truthful diagnostics\n- T30: #31 — Add cross-platform CI, GPU/media conformance and hardware release qualification\n\n## Acceptance criteria\n\n- [ ] Every advertised artifact installs and passes core real-device smoke tests.\n- [ ] No release claims an untested decoder/backend/lock mode; no private credential files enter packages.\n- [ ] Maintainer licensing decisions and model provenance are recorded before distribution.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nUse prerelease channels and preserve previous installers/settings rollback; this task does not authorize publishing unqualified builds.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    },
+    {
+      "id": "T32",
+      "title": "Evaluate optional Vulkan-over-Metal and advanced temporal reconstruction feasibility",
+      "priority": "P2",
+      "phase": 5,
+      "size": "R",
+      "deps": [
+        "T15",
+        "T17",
+        "T18",
+        "T30"
+      ],
+      "paths": [
+        "crates/openps-metal/src/gpu.rs",
+        "crates/openps-metal/src/shaders.rs",
+        "crates/openps-video/src/vt.rs"
+      ],
+      "problem": "A request for Vulkan and advanced upscaling should be assessed honestly on iOS and video-only inputs rather than promised as native API parity.",
+      "steps": [
+        "Time-box Vulkan Portability/MoltenVK experiment on Apple targets only after native Metal works.",
+        "Measure binary size, native texture import, latency and shader parity against production Metal.",
+        "Evaluate any video-only temporal super-resolution proposal as a separate algorithm with held-out artifact/latency tests.",
+        "Document why game-engine FSR/DLSS/XeSS paths requiring unavailable buffers are not plug-compatible.",
+        "Publish ADR deciding ship experimentally, defer or reject with evidence; keep DirectX Windows-only."
+      ],
+      "accept": [
+        "Research produces reproducible evidence and explicit compatibility table even if decision is not to ship.",
+        "No fake depth/motion data is passed to an SDK and described as correct integration.",
+        "Native iOS playback and portable spatial upscale remain independent of this experiment."
+      ],
+      "rollback": "Leave native Metal/spatial upscale as production defaults; no experimental dependency required for core builds.",
+      "number": 33,
+      "url": "https://github.com/Gourav1100/openps-rs/issues/33",
+      "body": "Parent specification: #1\n\n**Task:** T32 · **Priority:** P2 · **Phase:** 5 · **Estimate:** R (M: 1–2 weeks; L: 2–4 weeks; R: one-week feasibility time box). Estimates are preliminary.\n\n## Problem\n\nA request for Vulkan and advanced upscaling should be assessed honestly on iOS and video-only inputs rather than promised as native API parity.\n\n## Implementation locations\n\nExisting sources at audited commit `a27431fbe84b3848d06ad3ea284d85e01773f2ef`:\n\n- [crates/openps-metal/src/gpu.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/gpu.rs#L1)\n- [crates/openps-metal/src/shaders.rs:1](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-metal/src/shaders.rs#L1)\n- [crates/openps-video/src/vt.rs:436](https://github.com/Gourav1100/openps-rs/blob/a27431fbe84b3848d06ad3ea284d85e01773f2ef/crates/openps-video/src/vt.rs#L436)\n\nNew modules named below are proposed; follow the parent spec's target layout.\n\n## Implementation checklist\n\n- [ ] Time-box Vulkan Portability/MoltenVK experiment on Apple targets only after native Metal works.\n- [ ] Measure binary size, native texture import, latency and shader parity against production Metal.\n- [ ] Evaluate any video-only temporal super-resolution proposal as a separate algorithm with held-out artifact/latency tests.\n- [ ] Document why game-engine FSR/DLSS/XeSS paths requiring unavailable buffers are not plug-compatible.\n- [ ] Publish ADR deciding ship experimentally, defer or reject with evidence; keep DirectX Windows-only.\n\n## Dependencies\n\n- T15: #16 — Implement iOS/iPadOS native media host, Metal and sandbox lifecycle\n- T17: #18 — Port spatial upscaling and color pipeline across GPU backends\n- T18: #19 — Port video-derived frame generation with cuts, confidence and backend parity\n- T30: #31 — Add cross-platform CI, GPU/media conformance and hardware release qualification\n\n## Acceptance criteria\n\n- [ ] Research produces reproducible evidence and explicit compatibility table even if decision is not to ship.\n- [ ] No fake depth/motion data is passed to an SDK and described as correct integration.\n- [ ] Native iOS playback and portable spatial upscale remain independent of this experiment.\n- [ ] Attach targeted test/replay results with environment details; distinguish simulated and physical-device evidence.\n- [ ] Update user-facing capabilities/documentation and preserve macOS regression coverage where relevant.\n\n## Rollback / fallback\n\nLeave native Metal/spatial upscale as production defaults; no experimental dependency required for core builds.\n\n## Scope control\n\nImplement this work package against current main after verifying the pinned audit references. Do not mark a platform or feature supported solely from compilation. Full contracts, failure behavior, quality/performance targets and release gates are in #1.\n"
+    }
+  ]
+}
+
