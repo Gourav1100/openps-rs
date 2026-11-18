@@ -462,6 +462,7 @@ impl<P: Platform> Engine<P> {
         self.focused = focused;
         self.anchor = anchor;
         if changed_focus {
+            self.sync_scene_configuration();
             if !focused {
                 self.drop_text_modes();
             } // the overlay is hidden now: never keep the keyboard
