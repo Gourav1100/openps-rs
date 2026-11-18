@@ -510,7 +510,10 @@ async function paintPsnApi() {
   const [e, st] = await call("psn_api_status");
   const was = S.psnApi?.signed_in;
   S.psnApi = e ? null : st;
-  if (!!st?.signed_in !== !!was || !S.lib) loadLibrary(false);
+  if (!!st?.signed_in !== !!was || !S.lib) {
+    if (!!st?.signed_in !== !!was) { renderShelf(); syncGames(); } // placeholders at once, before the library call returns
+    loadLibrary(false);
+  }
   section.hidden = !!e || !st?.available;
   if (section.hidden) return syncGames();
   $("psn-api-signin").hidden = st.signed_in;
@@ -583,7 +586,7 @@ function remoteUi(on) {
   if (on) { $("psn-remote-step").textContent = "Starting…"; $("pair-psn-step").textContent = "Starting…"; }
   $("psn-remote-run").hidden = !on;
   $("pair-psn-run").hidden = !on;
-  for (const b of $$("#psn-console-list button, #pair-psn-list button")) b.disabled = on;
+  for (const b of $$("#psn-console-list button, #pair-list button")) b.disabled = on;
   if (!on) updatePairGate();
 }
 async function registerRemote(c) {
@@ -621,9 +624,21 @@ const ago = (secs) => {
 
 function renderShelf() {
   const box = $("trophy-shelf"), lib = S.lib?.library;
-  if (!lib?.summary) { box.hidden = true; return; }
+  if (!lib?.summary) {
+    // just signed in and the account is still loading: a placeholder shelf, so the page does not jump when it arrives
+    const loading = libLoading();
+    box.hidden = !loading;
+    box.setAttribute("aria-busy", String(loading));
+    if (!loading) { $("shelf-level").replaceChildren(); $("shelf-stats").replaceChildren(); }
+    else if (!box.querySelector(".skeleton")) {
+      $("shelf-level").replaceChildren(el("div", { className: "skeleton skel-ring" }));
+      $("shelf-stats").replaceChildren(...Array.from({ length: 4 }, () => el("div", { className: "skeleton skel-line" })));
+    }
+    return;
+  }
   const sm = lib.summary;
   box.hidden = false;
+  box.setAttribute("aria-busy", "false");
   const ring = el("div", { className: "level-ring", attrs: { role: "img", "aria-label": `Trophy level ${sm.level}, ${sm.progress} percent to the next level` } }, el("b", { textContent: String(sm.level) }));
   ring.style.setProperty("--p", String(sm.progress));
   $("shelf-level").replaceChildren(ring, el("div", { className: "lv-text" }, el("strong", { textContent: "Trophy level" }), el("span", { className: "muted small", textContent: `${sm.progress}% to level ${sm.level + 1}` })));
@@ -727,14 +742,16 @@ function gameTile(g, c) {
   } else if (g.size) meta.textContent = fmtSize(g.size);
   else if (g.play_minutes) meta.textContent = g.play_minutes >= 60 ? `${Math.round(g.play_minutes / 60)} h played` : `${g.play_minutes} min played`;
   // which key map this game uses
-  const sel = el("select", { className: "map-select", attrs: { "aria-label": `Key map for ${g.name}` }, disabled: !gameKey(g) });
+  const sel = S.info.local_input === false ? null : el("select", { className: "map-select", attrs: { "aria-label": `Key map for ${g.name}` }, disabled: !gameKey(g) });
   const cur = S.gameMaps[gameKey(g)] || "";
-  const gone = !!cur && !profileName(cur); // the key map this game used was deleted
-  sel.append(el("option", { value: "", textContent: "Default key map" }));
-  for (const p of S.profiles) sel.append(el("option", { value: p.id, textContent: p.name }));
-  sel.value = gone ? "" : cur;
+  const gone = !!sel && !!cur && !profileName(cur); // the key map this game used was deleted
+  if (sel) sel.append(el("option", { value: "", textContent: "Default key map" }));
+  if (sel) {
+    for (const p of S.profiles) sel.append(el("option", { value: p.id, textContent: p.name }));
+    sel.value = gone ? "" : cur;
+  }
   const warn = gone ? el("span", { className: "map-warn", attrs: { role: "status" } }, svg("alert"), "Key map removed, using default") : null;
-  sel.onchange = async () => {
+  if (sel) sel.onchange = async () => {
     const [e, m] = await call("set_game_map", { key: gameKey(g), profile: sel.value || null });
     if (e) { toast(`Could not save the key map: ${e}`, "error"); sel.value = S.gameMaps[gameKey(g)] || ""; return; }
     S.gameMaps = m;
@@ -742,7 +759,7 @@ function gameTile(g, c) {
     toast(sel.value ? `${g.name} will use “${profileName(sel.value)}”` : `${g.name} will use the default key map`, "ok", 2500);
   };
   const label = hasTrophies ? `${g.name}, ${g.platform || "game"}, ${t.progress} percent of trophies` : `${g.name}, ${g.platform || "game"}`;
-  const card = el("div", { className: "game", dataset: { name: g.name }, attrs: { role: "group", "aria-label": label } }, art, el("span", { className: "game-name", textContent: g.name, attrs: { title: g.name } }), meta, sel, ...(warn ? [warn] : []));
+  const card = el("div", { className: "game", dataset: { name: g.name }, attrs: { role: "group", "aria-label": label } }, art, el("span", { className: "game-name", textContent: g.name, attrs: { title: g.name } }), meta, ...(sel ? [sel] : []), ...(warn ? [warn] : []));
   img.dataset.src = g.image_url || "";
   return el("li", {}, card);
 }
@@ -790,7 +807,13 @@ function syncGames() {
   $("games-title").textContent = c ? (c.nickname || c.id) : "Your games";
   const stText = c ? ` · ${{ waking: "Waking up…", checking: "Checking…" }[statusOf(c)] || STATUS_TEXT[statusOf(c)] || ""}` : "";
   const when = S.lib?.fetched_at ? ` · updated ${ago(S.lib.fetched_at)}` : "";
-  $("games-sub").textContent = lib ? `${n} ${installed ? "installed games" : "games on your account"}${when}${stText}` : st.signed_in ? "Loading your games…" : "";
+  const loading = libLoading();
+  const sub = $("games-sub");
+  sub.textContent = lib ? `${n} ${installed ? "installed games" : "games on your account"}${when}${stText}` : loading ? "Loading your games…" : st.signed_in && S.libFailed ? "Could not load your games. Press Update to try again." : "";
+  sub.classList.toggle("is-loading", loading);
+  const skel = $("games-skel");
+  skel.hidden = !loading;
+  if (loading && !skel.childElementCount) skel.append(...Array.from({ length: 6 }, () => el("div", { className: "skeleton" })));
   const prompt = $("games-prompt");
   const need = !st.signed_in;
   prompt.hidden = !need;
@@ -829,7 +852,7 @@ const activeTile = () => tilesOf()[railActive] || null;
 function setActiveTile(i) {
   const tiles = tilesOf();
   railActive = Math.max(0, Math.min(i, tiles.length - 1));
-  tiles.forEach((t, k) => { const on = k === railActive; t.querySelector(".play-btn").tabIndex = on ? 0 : -1; t.querySelector(".map-select").tabIndex = on ? 0 : -1; });
+  tiles.forEach((t, k) => { const on = k === railActive; t.querySelector(".play-btn").tabIndex = on ? 0 : -1; const m = t.querySelector(".map-select"); if (m) m.tabIndex = on ? 0 : -1; });
 }
 const railStep = (dir) => { const t = $("games-track"); t.scrollBy({ left: dir * Math.max(240, t.clientWidth * 0.85) }); };
 $("rail-left").onclick = () => railStep(-1);
@@ -850,10 +873,14 @@ $("games-track").addEventListener("keydown", (ev) => {
 });
 
 let lastAutoRefresh = 0;
+// signed in, nothing saved yet and the first load still running: the games and the shelf show placeholders
+const libLoading = () => !!S.psnApi?.signed_in && !S.lib && !S.libFailed;
 async function loadLibrary(refresh = false, quiet = false) {
-  if (!S.psnApi?.signed_in) { S.lib = null; libBuilt = ""; renderShelf(); buildGames(); syncGames(); return; }
+  if (!S.psnApi?.signed_in) { S.lib = null; S.libFailed = false; libBuilt = ""; renderShelf(); buildGames(); syncGames(); return; }
+  if (!S.lib && S.libFailed) { S.libFailed = false; renderShelf(); syncGames(); } // a retry shows the placeholders again
   const [e, r] = await call("psn_library", { refresh });
-  if (e) { log(`games: ${e}`, "error"); return; }
+  if (e || !r.library) S.libFailed = !S.lib;
+  if (e) { log(`games: ${e}`, "error"); renderShelf(); syncGames(); return; }
   if (r.library) {
     S.lib = { library: r.library, fetched_at: r.fetched_at };
     renderShelf(); buildGames();
@@ -884,6 +911,7 @@ $("games-refresh").onclick = async () => {
 
 // ---- controls (key map file) ----------------------------------------------------------------------------------------
 async function paintKeymap() {
+  if (S.info?.local_input === false) return; // the Controls section is hidden
   const [e, info] = await call("input_config_info");
   $("keymap-state").textContent = e ? "Not available." : info.exists ? (S.keymapBad ? "Your key map has a mistake, so the default keys are in use. Open the file in your file manager, fix it, and connect again." : "You have a personal key map. It is saved next to your other app data.") : "Using the default keys.";
   $("keymap-reset").disabled = !!e || !info?.exists;
@@ -983,11 +1011,33 @@ async function loadPsn() {
 $("psn-btn").onclick = async () => {
   const btn = $("psn-btn");
   if (S.psn && !(await confirmDialog("Sign out of PlayStation Network?", "You will not be able to pair PS5 consoles until you sign in again. The games list from Settings is disconnected as well.", "Sign out"))) return;
+  if (!S.psn) return psnSignIn(btn);
   setLoading(btn, true);
-  const [e] = await call(S.psn ? "psn_sign_out" : "psn_sign_in");
+  const [e] = await call("psn_sign_out");
   setLoading(btn, false);
   if (e) toast(`PSN: ${e}`, "error");
 };
+// Sony's sign-in page is slow to load and its window only appears once it has: a loader covers the wait. It goes when the page is
+// ready, the window is closed, or the sign-in finishes or fails (or after a while, whatever happened).
+let psnWaitTimer = 0;
+function psnWait(on) {
+  const d = $("psn-wait");
+  clearTimeout(psnWaitTimer);
+  if (on) {
+    if (!d.open) d.showModal();
+    psnWaitTimer = setTimeout(() => psnWait(false), 30000);
+  } else if (d.open) d.close();
+}
+async function psnSignIn(btn) {
+  setLoading(btn, true);
+  psnWait(true);
+  const [e] = await call("psn_sign_in");
+  setLoading(btn, false);
+  if (e) {
+    psnWait(false);
+    toast(`PSN: ${e}`, "error");
+  }
+}
 
 // ---- pairing wizard -------------------------------------------------------------------------------------------------
 const P = { step: "find", selected: null, device: "ps5", busy: false };
@@ -1052,59 +1102,69 @@ function updatePairGate() {
   } else next.disabled = false;
 }
 
+// Consoles found on the network, each with its two ways in: registering over PSN (PS5, no code needed) or pairing with the console's code.
 function renderPairList() {
   const list = $("pair-list");
+  const focused = list.contains(document.activeElement) ? document.activeElement.getAttribute("aria-label") : null; // kept across repaints
   list.replaceChildren();
   if (!S.nearby.length) {
-    list.append(el("div", { className: "pick-empty", textContent: S.scanning ? "Looking for consoles…" : "No unpaired consoles found. Enter its address below." }));
+    list.append(S.scanning
+      ? el("div", { className: "pick-empty", attrs: { role: "status" } }, el("div", { className: "spinner small", attrs: { "aria-hidden": "true" } }), "Looking for consoles on your network…")
+      : el("div", { className: "pick-empty", textContent: "No unpaired consoles found. Enter its address below." }));
     return;
   }
-  S.nearby.forEach((d, i) => {
-    const b = el("button", { type: "button", attrs: { role: "radio", "aria-checked": String(P.selected?.host_id === d.host_id), tabindex: i === 0 ? "0" : "-1" } },
+  for (const d of S.nearby) {
+    const name = d.name || d.host_id;
+    const viaPsn = d.device !== "ps4" && !!(P.psnApi?.available && P.psnApi.remote);
+    const psnBtn = viaPsn ? el("button", { type: "button", className: "btn btn-primary btn-sm", textContent: "Add via PSN", attrs: { "aria-label": `Add ${name} via PlayStation Network` } }) : "";
+    const codeBtn = el("button", { type: "button", className: `btn btn-sm ${viaPsn ? "btn-ghost" : "btn-primary"}`, textContent: "Pair with code", attrs: { "aria-label": `Pair ${name} with a code` } });
+    if (psnBtn) psnBtn.onclick = () => addViaPsn(d);
+    codeBtn.onclick = () => pairWithCode(d);
+    for (const b of [psnBtn, codeBtn]) if (b) b.disabled = remoteBusy;
+    list.append(el("div", { className: "pick-row" + (P.selected?.host_id === d.host_id ? " sel" : ""), attrs: { role: "group", "aria-label": name } },
       el("div", { className: "tile tile-sm" }, svg(d.device === "ps4" ? "ps4" : "ps5")),
-      el("div", {}, el("div", { className: "console-name", textContent: d.name || d.host_id }), el("div", { className: "console-meta", textContent: `${d.addr} · ${STATUS_TEXT[d.status] || d.status}` })));
-    b.onclick = () => selectNearby(d);
-    list.append(b);
-  });
-  rovingFocus(list);
+      el("div", { className: "pick-info" }, el("div", { className: "console-name", textContent: name }), el("div", { className: "console-meta", textContent: `${d.addr} · ${STATUS_TEXT[d.status] || d.status}` })),
+      el("div", { className: "pick-actions" }, psnBtn, codeBtn)));
+  }
+  if (focused) $$("button", list).find((b) => b.getAttribute("aria-label") === focused)?.focus();
 }
-function selectNearby(d) {
+function pairWithCode(d) {
   P.selected = d;
   setDevice(d.device);
   $("pair-host").value = d.addr;
   clearFieldError($("pair-host"), $("pair-host-error"));
-  renderPairList();
-}
-function setDevice(dev) {
-  P.device = dev;
-  buildSeg($("pair-device"), [["ps5", "PS5"], ["ps4", "PS4"]], dev, (v) => { P.device = v; updatePairGate(); });
-}
-
-// Consoles on the signed-in PSN account, shown inside the Add dialog; picking one registers it over the internet.
-async function paintPairPsn() {
-  const box = $("pair-psn"), list = $("pair-psn-list");
   $("pair-psn-error").hidden = true;
-  const [, st] = await call("psn_api_status");
-  box.hidden = !(st?.available && st.signed_in && st.remote);
-  if (box.hidden) return;
-  list.replaceChildren(el("div", { className: "pick-empty", textContent: "Loading your consoles…" }));
-  const [e, found] = await call("psn_consoles");
-  list.replaceChildren();
-  if (e) return list.append(el("div", { className: "pick-empty", textContent: `Could not load your consoles: ${e}` }));
-  if (!found.length) return list.append(el("div", { className: "pick-empty", textContent: "No PS5 is linked to this account." }));
-  for (const c of found) {
-    const b = el("button", { type: "button", attrs: { "aria-label": `Add ${c.name} from your account` } },
-      el("div", { className: "tile tile-sm" }, svg("ps5")),
-      el("div", {}, el("div", { className: "console-name", textContent: c.name }), el("div", { className: "console-meta", textContent: "From your PlayStation account" })));
-    b.onclick = () => addFromAccount(c);
-    list.append(b);
-  }
+  P.step = "pin";
+  wizState();
+  $("pin").children[0].focus();
 }
-async function addFromAccount(c) {
+// The PSN account knows the console by name, not by address: the same rule as for the games list (its name, or the only PS5 there).
+function accountConsoleFor(d, found) {
+  const n = (d.name || "").trim().toLowerCase();
+  return found.find((c) => n && c.name.trim().toLowerCase() === n) || (found.length === 1 ? found[0] : null);
+}
+async function addViaPsn(d) {
   if (remoteBusy) return toast("A registration is already running.");
   const err = $("pair-psn-error");
+  const fail = (text) => { remoteUi(false); err.textContent = text; err.hidden = false; };
   err.hidden = true;
+  P.selected = d;
+  if (!P.psnApi?.signed_in) {
+    renderPairList();
+    err.textContent = "Sign in to PlayStation Network first, then press Add via PSN again.";
+    err.hidden = false;
+    if (S.info.psn) psnSignIn($("psn-btn"));
+    return;
+  }
   remoteUi(true);
+  $("pair-psn-step").textContent = "Finding it on your account…";
+  if (!P.accountConsoles) {
+    const [e, found] = await call("psn_consoles");
+    if (e) return fail(`Could not load the consoles on your account: ${e}`);
+    P.accountConsoles = found;
+  }
+  const c = accountConsoleFor(d, P.accountConsoles);
+  if (!c) return fail(P.accountConsoles.length ? `${d.name || "This console"} is not on your PlayStation account under the same name. Pair it with a code instead.` : "No PS5 is linked to your PlayStation account. Pair it with a code instead.");
   const [e, rec] = await call("psn_register_remote", { duid: c.duid });
   remoteUi(false);
   if (e) {
@@ -1120,6 +1180,10 @@ async function addFromAccount(c) {
   $("pair-next").focus();
   refreshConsoles();
 }
+function setDevice(dev) {
+  P.device = dev;
+  buildSeg($("pair-device"), [["ps5", "PS5"], ["ps4", "PS4"]], dev, (v) => { P.device = v; updatePairGate(); });
+}
 
 async function openPair(preselect) {
   const d = $("pair-dialog");
@@ -1130,15 +1194,20 @@ async function openPair(preselect) {
   remoteUi(remoteBusy); // a registration started in Settings is shown here too
   makePin();
   setDevice("ps5");
-  if (preselect) selectNearby(preselect);
+  P.selected = preselect || null;
+  P.psnApi = null;
+  P.accountConsoles = null;
+  $("pair-psn-error").hidden = true;
   renderPairList();
   wizState();
   d.showModal();
-  if (!preselect) $("pair-host").focus();
+  if (preselect) $("pair-list").querySelector(".pick-row.sel button")?.focus();
+  else $("pair-host").focus();
 
-  paintPairPsn();
-  await scan(false);
-  if (preselect === undefined && S.nearby.length === 1 && !$("pair-host").value) selectNearby(S.nearby[0]);
+  call("psn_api_status").then(([, st]) => { P.psnApi = st; renderPairList(); });
+  const scanned = scan(false); // marks the scan as running at once, so the list shows its spinner
+  renderPairList();
+  await scanned;
   renderPairList();
 }
 
@@ -1151,13 +1220,7 @@ $("pair-back").onclick = () => { P.step = "find"; wizState(); $("pair-host").foc
 $("pair-host").addEventListener("input", () => clearFieldError($("pair-host"), $("pair-host-error")));
 // A running registration cannot be dismissed by Escape or the backdrop; Cancel registration is the way out.
 $("pair-dialog").addEventListener("cancel", (ev) => { if (P.busy && remoteBusy) { ev.preventDefault(); toast("A registration is running. Use Cancel registration first."); } });
-$("pair-signin").onclick = async () => {
-  const btn = $("pair-signin");
-  setLoading(btn, true);
-  const [e] = await call("psn_sign_in");
-  setLoading(btn, false);
-  if (e) toast(`PSN: ${e}`, "error");
-};
+$("pair-signin").onclick = () => psnSignIn($("pair-signin"));
 const HOST_RE = /^[A-Za-z0-9._:\-\[\]]{1,253}$/;
 $("pair-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1284,6 +1347,7 @@ async function renderSettings() {
   drawSettings();
 }
 async function renderControllerSettings() {
+  if (S.info?.local_input === false) return; // the Controls section is hidden
   const list = $("controller-list");
   list.setAttribute("aria-busy", "true");
   const [error, status] = await call("controller_status");
@@ -1394,13 +1458,15 @@ function closeEnginePop() {
   $("engine-btn").setAttribute("aria-pressed", "false");
   $("engine-btn").setAttribute("aria-expanded", "false");
 }
+const ENGINES = [["metalfx", "MetalFX"], ["fsr", "FSR"]];
 function paintEnginePop() {
   paintDebugBar();
   const s = S.settings;
   const on = !!s?.debug && (!!S.info.metal || !!S.info.fsr);
   $("engine-btn").hidden = !on;
   if (!on) { closeEnginePop(); return; }
-  buildSeg(document.querySelector('[data-hud="engine"]'), [["metalfx", "MetalFX"], ["fsr", "FSR"]], s.engine === "fsr" ? "fsr" : "metalfx", (v) => save({ engine: v }, true), (v) => (v === "fsr" ? !S.info.fsr : !S.info.metal), "Not available on this Mac");
+  const engines = ENGINES.filter(([v]) => (v === "fsr" ? S.info.fsr : S.info.metal));
+  buildSeg(document.querySelector('[data-hud="engine"]'), engines, engines.some(([v]) => v === s.engine) ? s.engine : engines[0][0], (v) => save({ engine: v }, true));
   // the upscaling resolution, live: the multiple of the stream's size the picture is made at (then scaled to fit the window)
   const upTo = (f) => `${Math.round((s.height * f) / 2) * 2}p`;
   buildSeg(document.querySelector('[data-hud="upscale"]'), [["off", "Off", ""], ["1.33x", "1.33×", upTo(4 / 3)], ["1.5x", "1.5×", upTo(1.5)], ["2x", "2×", upTo(2)]], s.upscale || "off", (v) => save({ upscale: v }, true));
@@ -1447,7 +1513,11 @@ function drawSettings() {
   $("bitrate-hint").textContent = s.bitrate === -1
     ? "Auto asks for as much as your connection can carry, up to 100 Mbit/s (the most the original app allows) on a fast wired or Wi-Fi network; a console behind a router gets a normal request. The console decides what it really sends. If it refuses the request or ends the stream right after it starts, OpenPS connects again with a normal value."
     : `Fixed: the console is asked for ${s.bitrate / 1000} Mbit/s.`;
-  buildSeg(document.querySelector('[data-setting="codec"]'), [["hevc", "HEVC (H.265)"], ["h264", "H.264"]], s.hevc ? "hevc" : "h264", (v) => save({ hevc: v === "hevc", ...(v === "hevc" ? {} : { hdr: false }) }), (v) => v === "hevc" && !hevcOk, "This device cannot decode HEVC");
+  // Settings this device can never use are hidden rather than shown disabled.
+  const codecBox = document.querySelector('[data-setting="codec"]');
+  codecBox.hidden = !hevcOk;
+  if (hevcOk) buildSeg(codecBox, [["hevc", "HEVC (H.265)"], ["h264", "H.264"]], s.hevc ? "hevc" : "h264", (v) => save({ hevc: v === "hevc", ...(v === "hevc" ? {} : { hdr: false }) }));
+  $("hdr-switch").closest(".field").hidden = !hevcOk;
   $("codec-hint").textContent = hevcOk ? "HEVC looks better at the same bitrate. H.264 is the compatible fallback." : "This device cannot decode HEVC in hardware, so H.264 is used.";
   // display: upscaling, the engine, each picture filter with its own switch, the frame rate, how extra frames are made, camera compensation
   const hz = Math.round(S.info.display_hz || 0);
@@ -1455,10 +1525,16 @@ function drawSettings() {
   $("metal-chip").hidden = !gpuOk;
   // each multiple shows the size it draws for the resolution chosen above (rounded to an even number of lines)
   const upTo = (f) => `${Math.round((s.height * f) / 2) * 2}p`;
-  buildSeg(document.querySelector('[data-setting="upscale"]'), [["off", "Off", ""], ["1.33x", "1.33×", upTo(4 / 3)], ["1.5x", "1.5×", upTo(1.5)], ["2x", "2×", upTo(2)]], s.upscale || "off", (v) => save({ upscale: v }), (v) => v !== "off" && !gpuOk, "Needs a GPU upscaler, not available on this device");
-  const engine = s.engine === "fsr" ? "fsr" : "metalfx";
+  const upBox = document.querySelector('[data-setting="upscale"]');
+  for (const sel of [upBox, "#fg-field", '[data-setting="frame_mode"]', '[data-setting="interpolator"]', "#linear-field", "#sharp-field", "#rcas-field"]) {
+    (typeof sel === "string" ? document.querySelector(sel) : sel).closest(".field").hidden = !gpuOk;
+  }
+  for (const id of ["cam-switch", "imm-switch"]) $(id).closest(".field").hidden = !metal;
+  buildSeg(upBox, [["off", "Off", ""], ["1.33x", "1.33×", upTo(4 / 3)], ["1.5x", "1.5×", upTo(1.5)], ["2x", "2×", upTo(2)]], s.upscale || "off", (v) => save({ upscale: v }));
+  const engines = ENGINES.filter(([v]) => (v === "fsr" ? fsrOk : metal));
+  const engine = engines.some(([v]) => v === s.engine) ? s.engine : engines[0]?.[0] || "metalfx";
   $("engine-field").hidden = !gpuOk;
-  if (gpuOk) buildSeg(document.querySelector('[data-setting="engine"]'), [["metalfx", "MetalFX"], ["fsr", "FSR"]], engine, (v) => save({ engine: v }), (v) => (v === "fsr" ? !fsrOk : !metal), "Not available on this Mac");
+  if (gpuOk) buildSeg(document.querySelector('[data-setting="engine"]'), engines, engine, (v) => save({ engine: v }));
   paintEngineHint(s);
   const upscaled = (s.upscale || "off") !== "off" && gpuOk;
   // Every filter has its own switch; its slider keeps its value while the filter is off. Sliders are in percent and apply when you let go;
@@ -1508,9 +1584,10 @@ function drawSettings() {
   buildSeg(document.querySelector('[data-setting="frame_mode"]'), [["smooth", "Smooth"], ["zero_latency", "Low latency"]], s.frame_mode || "smooth", (v) => save({ frame_mode: v }), () => !gen, "Only used when frames are generated");
   $("mode-hint").textContent = !gen ? `Only used when frames are generated (frame generation on, and a display above the stream's ${nativeHz} Hz).` : (s.frame_mode === "smooth" ? "Interpolated between real frames: the smoothest picture. It adds about one frame of delay (17 ms at 60 fps), which is still low enough to feel responsive; camera prediction hides most of it when you look around. A smoothing buffer holds the picture back by how late the slowest recent frames arrive (up to 25 ms), so a late frame does not stall the motion." : "Lowest delay: real frames are shown the instant they arrive and extra frames are predicted forward. Nothing is added, but fast edges can show small artifacts.");
   const dbg = $("debug-switch");
-  const interp = ["builtin", "metalfx", "dynamic"].includes(s.interpolator) ? s.interpolator : "metalfx";
+  const interp = !S.info.metalfx ? "builtin" : ["builtin", "metalfx", "dynamic"].includes(s.interpolator) ? s.interpolator : "metalfx";
   const smoothGen = gen && (s.frame_mode || "smooth") === "smooth";
-  buildSeg(document.querySelector('[data-setting="interpolator"]'), [["builtin", "Built-in"], ["metalfx", "MetalFX"], ["dynamic", "Dynamic"]], interp, (v) => save({ interpolator: v }), (v) => !smoothGen || (v !== "builtin" && !S.info.metalfx), !smoothGen ? "Only used when frames are generated in Smooth mode" : "MetalFX frame interpolation needs macOS 26");
+  const interps = [["builtin", "Built-in"], ...(S.info.metalfx ? [["metalfx", "MetalFX"], ["dynamic", "Dynamic"]] : [])];
+  buildSeg(document.querySelector('[data-setting="interpolator"]'), interps, interp, (v) => save({ interpolator: v }), () => !smoothGen, "Only used when frames are generated in Smooth mode");
   $("interp-hint").textContent = !smoothGen ? "Only used when frames are generated in Smooth mode."
     : interp === "builtin" ? "Our own interpolator makes every generated frame. It is the lightest on the GPU and makes a frame at any point between two real ones."
       : interp === "metalfx" ? "Apple's MetalFX makes every generated frame, whatever it costs. It makes the frame halfway between two real ones, so it is smoothest at 2×; when the GPU cannot keep up, the frame rate is lowered instead."
@@ -1942,6 +2019,7 @@ const VIEW_NAMES = { first_person: "first person", third_person: "third person" 
 // What the scene detector says, as one line and a tone for its chip.
 function sceneText(sc) {
   if (!sc || !sc.enabled) return { text: "Off", tone: "" };
+  if (sc.state === "stale") return { text: "Waiting for a fresh picture…", tone: "warn" };
   if (sc.state === "idle") return { text: "Starts when the keyboard and mouse are on (not needed with a controller)", tone: "" };
   if (sc.state === "unavailable") return { text: sc.note || "The scene model could not start.", tone: "warn" };
   if (sc.state === "loading" || !sc.context) return { text: sc.state === "running" ? "Looking…" : "Preparing the model…", tone: "" };
@@ -2624,7 +2702,12 @@ listen("openps://event", ({ payload: e }) => {
   switch (e.type) {
     case "session": onSessionEvent(e); break;
     case "consoles_changed": refreshConsoles(); break;
-    case "psn_changed": loadPsn(); paintPsnApi(); break;
+    case "psn_changed":
+      psnWait(false);
+      loadPsn();
+      paintPsnApi();
+      if ($("pair-dialog").open) call("psn_api_status").then(([, st]) => { P.psnApi = st; P.accountConsoles = null; renderPairList(); });
+      break;
     case "stats": onStats(e); break;
     case "input": onInputEvent(e); break;
     case "control":
@@ -2635,7 +2718,8 @@ listen("openps://event", ({ payload: e }) => {
         S.keymapBad = true;
       }
       else if (e.kind === "remote_step") { $("psn-remote-step").textContent = `${e.detail}…`; $("pair-psn-step").textContent = `${e.detail}…`; }
-      else if (e.kind === "psn_error") toast(`PSN sign-in did not complete: ${e.detail}`, "error");
+      else if (e.kind === "psn_error") { psnWait(false); toast(`PSN sign-in did not complete: ${e.detail}`, "error"); }
+      else if (e.kind === "psn_login_ready" || e.kind === "psn_login_closed") psnWait(false);
       else if (e.kind === "scene_model_ready") sceneModelReady();
       else log(`console: ${e.kind}${e.detail ? " " + e.detail : ""}`);
       break;
@@ -2716,6 +2800,8 @@ $("log-copy").onclick = async () => {
   const [, info] = await call("app_info");
   if (info) S.info = info;
   $("demo-badge").hidden = !S.info.demo;
+  // what this platform cannot do is not shown at all (keyboard, mouse and controllers are macOS-only for now)
+  for (const id of ["controls-section", "map-btn", "ps-btn"]) $(id).hidden = S.info.local_input === false;
   for (const n of S.info.notices || []) showNotice(n.kind, n.detail);
   log(`OpenPS ${S.info.version}${S.info.demo ? " (demo mode)" : ""}`);
   call("scene_model_ready").then(([, ready]) => { if (ready) sceneModelReady(); });

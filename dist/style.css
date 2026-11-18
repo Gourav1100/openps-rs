@@ -747,6 +747,44 @@ body.hud-idle {
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }
+/* a small spinner in front of a "Loading…" line */
+.is-loading::before {
+  content: "";
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 0.45em;
+  vertical-align: -0.12em;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.games-skel {
+  display: flex;
+  gap: 0.8rem;
+  padding: 0.35rem 0 1rem;
+  overflow: hidden;
+}
+.games-skel .skeleton {
+  flex: none;
+  width: 11.5rem;
+  min-height: 0;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+}
+.shelf .skeleton {
+  min-height: 0;
+  border-radius: 10px;
+}
+.shelf .skel-ring {
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+}
+.shelf .skel-line {
+  height: 2.6rem;
+}
 @keyframes shimmer {
   to {
     background-position: -200% 0;
@@ -1149,35 +1187,40 @@ dialog::backdrop {
   display: grid;
   gap: 0.5rem;
 }
-.pick button {
-  all: unset;
+.pick-row {
   box-sizing: border-box;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.8rem;
   padding: 0.75rem 0.9rem;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
-  cursor: pointer;
   min-height: 3.25rem;
   transition:
     border-color 0.15s,
     background 0.15s;
 }
-.pick button:hover {
-  background: var(--surface-2);
-}
-.pick button[aria-checked="true"] {
+.pick-row.sel {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   box-shadow: 0 0 0 1px var(--accent);
 }
-.pick button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.pick-row > .pick-info {
+  flex: 1;
+  min-width: 8rem;
+}
+.pick-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 .pick-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
   padding: 0.9rem;
   color: var(--muted);
   border: 1px dashed var(--line-strong);
@@ -2004,6 +2047,17 @@ ul.plain li {
 .remote-run p {
   margin: 0;
   flex: 1;
+}
+.wait-dlg[open] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2rem 2.5rem;
+  text-align: center;
+}
+.wait-dlg p {
+  margin: 0;
 }
 .spinner.small {
   width: 1.1rem;

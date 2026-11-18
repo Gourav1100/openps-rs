@@ -8,8 +8,8 @@ use objc2::{Encode, Encoding};
 use openps_audio::media::AudioOut;
 use openps_core::events::{AppEvent, EventSink, MediaSink};
 use openps_core::{SessionState, StreamOptions};
-use openps_metal::look::SharedLook;
 use openps_metal::{FrameMode, MetalRenderer, RenderSettings, Upscale};
+use openps_render::look::SharedLook;
 use openps_video::media::{DecodingMedia, PictureSink};
 use openps_video::render::Renderer;
 use openps_video::vt::Frame;
@@ -312,9 +312,9 @@ impl Video {
                 });
                 stats["adaptive"] = serde_json::json!({
                     "on": s.adaptive, "asked_hz": s.asked_hz, "cap_hz": s.adaptive_cap_hz, "load": s.adaptive_load, "peak": s.adaptive_peak,
-                    "over_s": s.adaptive_over_s, "down_after_s": openps_metal::ladder::DOWN_AFTER_S,
-                    "heavy_mean": openps_metal::ladder::HEAVY_MEAN, "heavy_peak": openps_metal::ladder::HEAVY_PEAK,
-                    "step_hz": openps_metal::ladder::STEP_HZ,
+                    "over_s": s.adaptive_over_s, "down_after_s": openps_render::ladder::DOWN_AFTER_S,
+                    "heavy_mean": openps_render::ladder::HEAVY_MEAN, "heavy_peak": openps_render::ladder::HEAVY_PEAK,
+                    "step_hz": openps_render::ladder::STEP_HZ,
                 });
                 stats["config"] = serde_json::json!({
                     "upscale_factor": c.upscale.factor(), "display_hz": c.display_hz, "gen_factor": c.gen_factor,

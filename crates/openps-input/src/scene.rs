@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
@@ -112,12 +112,6 @@ impl SceneContext {
         }
     }
 
-    fn index(self) -> u8 {
-        self as u8
-    }
-    fn from_index(i: u8) -> Option<SceneContext> {
-        SceneContext::ALL.get(usize::from(i)).copied()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,21 +184,31 @@ pub struct SceneStatus {
     pub note: String,
 }
 
-const UNKNOWN: u8 = u8::MAX;
+/// A scene may drive input for at most this long after its source picture.
+pub const MAX_SCENE_AGE_S: f64 = 2.0;
+
+#[derive(Clone, Copy)]
+struct Observation {
+    context: SceneContext,
+    view: Option<SceneView>,
+    confidence: f32,
+    at: f64,
+}
 const ALL_LAYERS: u8 = 0b111;
 const MAX_QUEUED: usize = 256;
 
 /// Shared between the input engine (presses in, layer out) and the scene detector (picture in, scene out). All fields are cheap to read from
-/// the 1 kHz input loop: atomics, plus one short lock for the actions.
+/// the 1 kHz input loop: atomics and short snapshot locks; inference never holds these locks.
 pub struct SceneLink {
     epoch: Instant,
     enabled: AtomicBool,
     /// The keyboard and mouse are driving the console. The scene only matters then; with a physical controller the detector sleeps.
     active: AtomicBool,
     state: AtomicU8,
-    context: AtomicU8,
-    view: AtomicU8,
-    confidence: AtomicU32,
+    // Serializes lifecycle changes with conditional publication, never inference.
+    publication: Mutex<()>,
+    generation: AtomicU64,
+    observation: Mutex<Option<Observation>>,
     note: Mutex<String>,
     actions: Mutex<VecDeque<(f64, Action)>>,
     labeled: AtomicU8,
@@ -225,9 +229,9 @@ impl SceneLink {
             enabled: AtomicBool::new(false),
             active: AtomicBool::new(true),
             state: AtomicU8::new(DetectorState::Off.index()),
-            context: AtomicU8::new(UNKNOWN),
-            view: AtomicU8::new(UNKNOWN),
-            confidence: AtomicU32::new(0),
+            publication: Mutex::new(()),
+            generation: AtomicU64::new(0),
+            observation: Mutex::new(None),
             note: Mutex::new(String::new()),
             actions: Mutex::new(VecDeque::new()),
             labeled: AtomicU8::new(0),
@@ -252,11 +256,12 @@ impl SceneLink {
     /// Tell the detector whether the keyboard and mouse are driving the console. While they are not (a physical controller is), it waits and
     /// forgets the scene; it starts again when they are.
     pub fn set_active(&self, on: bool) {
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
         if self.active.swap(on, Ordering::Relaxed) == on || !self.enabled() {
             return;
         }
         self.actions.lock().unwrap_or_else(PoisonError::into_inner).clear();
-        self.clear_scene();
+        self.invalidate_inner();
         if !on {
             self.publish_state(DetectorState::Idle, "");
         } else if DetectorState::from_index(self.state.load(Ordering::Relaxed)) == DetectorState::Idle {
@@ -266,6 +271,7 @@ impl SceneLink {
 
     /// Switch the detector on or off. Switching it off forgets what it saw: the layer goes back to `on_foot`.
     pub fn set_enabled(&self, on: bool) {
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
         if self.enabled.swap(on, Ordering::Relaxed) == on {
             return;
         }
@@ -276,7 +282,7 @@ impl SceneLink {
             (true, false) => DetectorState::Idle,
         };
         self.publish_state(state, "");
-        self.clear_scene();
+        self.invalidate_inner();
     }
 
     pub fn publish_state(&self, state: DetectorState, note: &str) {
@@ -284,27 +290,69 @@ impl SceneLink {
         *self.note.lock().unwrap_or_else(PoisonError::into_inner) = note.to_string();
     }
 
-    pub fn publish_scene(&self, context: SceneContext, view: Option<SceneView>, confidence: f32) {
-        self.context.store(context.index(), Ordering::Relaxed);
-        self.view.store(view.map_or(UNKNOWN, |v| v as u8), Ordering::Relaxed);
-        self.confidence.store(confidence.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    /// Token captured with a picture; lifecycle changes invalidate every older token.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
+    pub fn publish_scene(&self, context: SceneContext, view: Option<SceneView>, confidence: f32) {
+        let _ = self.publish_if_current(self.generation(), self.now(), context, view, confidence);
+    }
+
+    /// Validation and publication share the lifecycle lock, preventing off/on ABA races.
+    pub fn publish_if_current(
+        &self, generation: u64, at: f64, context: SceneContext,
+        view: Option<SceneView>, confidence: f32,
+    ) -> bool {
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        let age = self.now() - at;
+        if generation != self.generation() || !self.running() || !at.is_finite()
+            || !(0.0..=MAX_SCENE_AGE_S).contains(&age) || !confidence.is_finite() {
+            return false;
+        }
+        *self.observation.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(Observation { context, view, confidence: confidence.clamp(0.0, 1.0), at });
+        self.publish_state(DetectorState::Running, "");
+        true
+    }
+
+    /// An inference failure clears the scene only if it still belongs to this run.
+    pub fn fail_if_current(&self, generation: u64, note: &str) {
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        if generation == self.generation() && self.running() {
+            *self.observation.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            self.publish_state(DetectorState::Unavailable, note);
+        }
+    }
+
+    fn invalidate_inner(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        *self.observation.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        self.actions.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    /// Forget the scene and invalidate queued/in-flight work (profile, stream or host change).
     pub fn clear_scene(&self) {
-        self.context.store(UNKNOWN, Ordering::Relaxed);
-        self.view.store(UNKNOWN, Ordering::Relaxed);
-        self.confidence.store(0, Ordering::Relaxed);
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        self.invalidate_inner();
+    }
+
+    fn fresh_observation(&self) -> Option<Observation> {
+        let observation = *self.observation.lock().unwrap_or_else(PoisonError::into_inner);
+        observation.filter(|o| self.running() && self.now() - o.at <= MAX_SCENE_AGE_S)
     }
 
     pub fn context(&self) -> Option<SceneContext> {
-        SceneContext::from_index(self.context.load(Ordering::Relaxed))
+        self.fresh_observation().map(|o| o.context)
     }
 
     /// Which layers the profile uses. A layer that is off is never chosen and its scenes are never reported (see
     /// [`SceneLink::allowed_contexts`]); with none given all three are used.
     pub fn set_layers(&self, layers: impl IntoIterator<Item = Layer>) {
         let mask = layers.into_iter().fold(0u8, |m, l| m | (1 << l as u8));
-        self.layers.store(if mask == 0 { ALL_LAYERS } else { mask }, Ordering::Relaxed);
+        let mask = if mask == 0 { ALL_LAYERS } else { mask };
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.layers.swap(mask, Ordering::Relaxed) != mask { self.invalidate_inner(); }
     }
 
     pub fn layer_enabled(&self, layer: Layer) -> bool {
@@ -332,7 +380,8 @@ impl SceneLink {
     pub fn set_labeled(&self, actions: impl IntoIterator<Item = Action>) {
         let mask =
             actions.into_iter().fold(0u8, |m, a| m | (1 << Action::ALL.iter().position(|x| *x == a).unwrap_or(0)));
-        self.labeled.store(mask, Ordering::Relaxed);
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.labeled.swap(mask, Ordering::Relaxed) != mask { self.invalidate_inner(); }
     }
 
     pub fn is_labeled(&self, action: Action) -> bool {
@@ -359,19 +408,19 @@ impl SceneLink {
     }
 
     pub fn status(&self) -> SceneStatus {
-        let view = match self.view.load(Ordering::Relaxed) {
-            0 => Some(SceneView::FirstPerson.name()),
-            1 => Some(SceneView::ThirdPerson.name()),
-            _ => None,
-        };
+        let _guard = self.publication.lock().unwrap_or_else(PoisonError::into_inner);
+        let observation = self.fresh_observation();
+        let state = DetectorState::from_index(self.state.load(Ordering::Relaxed));
+        let stale = self.running() && state == DetectorState::Running && observation.is_none();
         SceneStatus {
             enabled: self.enabled(),
-            state: DetectorState::from_index(self.state.load(Ordering::Relaxed)).name(),
-            context: self.context().map(SceneContext::name),
-            view,
-            confidence: (f32::from_bits(self.confidence.load(Ordering::Relaxed)) * 100.0).round() as u8,
+            state: if stale { "stale" } else { state.name() },
+            context: observation.map(|o| o.context.name()),
+            view: observation.and_then(|o| o.view).map(SceneView::name),
+            confidence: observation.map_or(0, |o| (o.confidence * 100.0).round() as u8),
             layer: self.layer().name(),
-            note: self.note.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            note: if stale { "Waiting for a fresh scene picture".into() }
+                else { self.note.lock().unwrap_or_else(PoisonError::into_inner).clone() },
         }
     }
 }
@@ -379,6 +428,67 @@ impl SceneLink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_inference_cannot_publish_after_disable_enable_or_profile_reset() {
+        let link = SceneLink::new();
+        link.set_enabled(true);
+        let old = link.generation();
+        link.set_enabled(false);
+        link.set_enabled(true);
+        assert!(!link.publish_if_current(old, link.now(), SceneContext::Menu, None, 0.9));
+        let current = link.generation();
+        assert!(link.publish_if_current(current, link.now(), SceneContext::InVehicle, None, 0.9));
+        link.clear_scene();
+        assert!(!link.publish_if_current(current, link.now(), SceneContext::Menu, None, 0.9));
+        assert_eq!(link.layer(), Layer::OnFoot);
+    }
+
+    #[test]
+    fn expired_scene_falls_back_without_waiting_for_another_inference() {
+        let link = SceneLink::new();
+        link.set_enabled(true);
+        link.publish_scene(SceneContext::InVehicle, Some(SceneView::FirstPerson), 0.9);
+        link.observation.lock().unwrap().as_mut().unwrap().at = link.now() - MAX_SCENE_AGE_S - 0.1;
+        let status = link.status();
+        assert_eq!((status.state, status.context, status.view, status.confidence, status.layer),
+            ("stale", None, None, 0, "on_foot"));
+        assert!(!link.publish_if_current(link.generation(), link.now() - 3.0, SceneContext::Menu, None, 1.0));
+        assert!(!link.publish_if_current(link.generation(), f64::NAN, SceneContext::Menu, None, 1.0));
+        assert!(!link.publish_if_current(link.generation(), link.now() + 10.0, SceneContext::Menu, None, 1.0));
+    }
+
+    #[test]
+    fn inference_failure_clears_scene_and_success_recovers() {
+        let link = SceneLink::new();
+        link.set_enabled(true);
+        let old = link.generation();
+        link.clear_scene();
+        link.publish_scene(SceneContext::InVehicle, None, 0.9);
+        link.fail_if_current(old, "obsolete error");
+        assert_eq!(link.layer(), Layer::InVehicle);
+        link.fail_if_current(link.generation(), "inference failed");
+        assert_eq!(link.status().state, "unavailable");
+        assert_eq!(link.layer(), Layer::OnFoot);
+        link.publish_scene(SceneContext::Menu, None, 0.9);
+        assert_eq!(link.status().state, "running");
+        assert!(link.status().note.is_empty());
+    }
+
+    #[test]
+    fn profile_constraints_invalidate_old_work_but_unchanged_polls_do_not() {
+        let link = SceneLink::new();
+        link.set_enabled(true);
+        let first = link.generation();
+        link.set_layers([Layer::OnFoot, Layer::InMenu]);
+        assert_ne!(first, link.generation());
+        let second = link.generation();
+        link.set_layers([Layer::OnFoot, Layer::InMenu]);
+        assert_eq!(second, link.generation());
+        link.set_labeled([Action::PauseGame]);
+        assert_ne!(second, link.generation());
+        assert!(!link.publish_if_current(second, link.now(), SceneContext::Menu, None, 1.0));
+    }
 
     #[test]
     fn names_round_trip() {
@@ -429,7 +539,7 @@ mod tests {
         link.publish_scene(SceneContext::Cutscene, None, 0.9);
         assert_eq!(link.layer(), Layer::InMenu);
         link.set_layers([Layer::InVehicle, Layer::InMenu]);
-        assert_eq!(link.layer(), Layer::InMenu);
+        assert_eq!(link.layer(), Layer::InVehicle, "a changed profile forgets the previous scene");
         link.publish_scene(SceneContext::OnFoot, None, 0.9);
         assert_eq!(link.layer(), Layer::InVehicle, "no on-foot layer: the first one in use stands in");
         link.set_enabled(false);

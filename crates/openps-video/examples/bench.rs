@@ -1,9 +1,10 @@
 //! `cargo run --release -p openps-video --example bench -- <file.annexb>`: decode throughput on a real stream.
-use openps_video::nal::{self, ParameterSets};
-use openps_video::vt::Decoder;
-use std::time::Instant;
-
+#[cfg(target_os = "macos")]
 fn main() {
+    use openps_video::nal::{self, ParameterSets};
+    use openps_video::vt::Decoder;
+    use std::time::Instant;
+
     let path = std::env::args().nth(1).expect("path to an Annex-B file");
     let s = std::fs::read(path).unwrap();
     let codec = nal::detect_codec(&s).expect("codec");
@@ -16,6 +17,7 @@ fn main() {
             units.push(vec![]);
             have = false;
         }
+
         have |= pic;
         units.last_mut().unwrap().extend([0, 0, 0, 1]);
         units.last_mut().unwrap().extend(n);
@@ -42,4 +44,10 @@ fn main() {
         p(0.99),
         times[times.len() - 1]
     );
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("the decode benchmark requires macOS VideoToolbox");
+    std::process::exit(1);
 }

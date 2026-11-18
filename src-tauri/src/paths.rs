@@ -21,12 +21,17 @@ pub fn fallback_dir(home: Option<&str>) -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Library/Application Support/OpenPS"))
 }
 
-/// Create the directory owner-only; it holds secrets.
+/// Create the data directory, restricting it to the owner on Unix.
 pub fn ensure(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    // an existing directory keeps its mode from creation time; tighten it (best effort on directories we do not own)
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        // An existing directory keeps its mode from creation time; tighten it where possible.
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
     Ok(())
 }
 
@@ -52,7 +57,10 @@ mod tests {
         let d = t.path().join("a/b/data");
         ensure(&d).unwrap();
         ensure(&d).unwrap(); // idempotent
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+        }
     }
 }

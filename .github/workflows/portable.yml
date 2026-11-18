@@ -1,0 +1,92 @@
+name: Portable policy and input
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo test --locked -p openps-render -p openps-input -p openps-input-host -p openps-scene --lib
+      - run: cargo test --locked -p openps-render -p openps-input -p openps-input-host --tests
+      - run: node --test tests/advanced-mapping.test.js
+  linux-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Linux workspace in Docker
+        run: docker compose run --build --rm linux-test
+      - name: Build Linux application in Docker
+        run: docker compose run --build --rm linux-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openps-linux
+          path: artifacts/linux/openps-app
+          if-no-files-found: error
+  desktop-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: mkdir -p target/tmp
+      - run: node --test tests/*.test.js
+      - run: cargo check --locked --workspace --tests
+      - run: cargo test --locked -p openps-app -p openps-core -p openps-psn -p openps-gamepad --features psn-live -- --test-threads=2
+      - if: runner.os == 'macOS'
+        run: cargo test --locked -p openps-macinput
+      - if: runner.os == 'macOS'
+        run: cargo build --locked --release -p openps-app --features tauri/custom-protocol,psn-live
+      - if: runner.os == 'Windows'
+        run: cargo build --locked -p openps-app --features tauri/custom-protocol,psn-live
+      - name: Package macOS DMG
+        if: runner.os == 'macOS'
+        run: ./build-all.sh macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openps-${{ runner.os }}
+          path: |
+            target/release/openps-app
+            target/debug/openps-app.exe
+            artifacts/macos/*.dmg
+          if-no-files-found: error
+  windows-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose run --build --rm windows-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openps-windows-cross
+          path: artifacts/windows/openps-app.exe
+          if-no-files-found: error
+  mobile-contracts:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-linux-android, aarch64-apple-ios]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo check --locked --target ${{ matrix.target }} -p openps-render -p openps-input-host -p openps-scene

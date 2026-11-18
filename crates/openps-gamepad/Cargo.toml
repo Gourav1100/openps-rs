@@ -7,14 +7,18 @@ description = "Physical DualSense / DualShock 4 support: raw pad values -> Contr
 [dependencies]
 openps-input = { path = "../openps-input" }
 openps-stream = { path = "../openps-stream" }
-hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
+hidapi = { version = "2.6", default-features = false }
 crc32fast = "1"
 log = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = "0.3"
 objc2-game-controller = "0.3.2"
 dispatch2 = "0.3"
 objc2-core-haptics = "0.3.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }

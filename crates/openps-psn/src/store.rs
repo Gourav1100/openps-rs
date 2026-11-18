@@ -92,8 +92,9 @@ mod tests {
 }
 
 /// Secrets in a JSON file inside the application's own data directory (portable mode: nothing in the OS keychain or
-/// any system location). The file is created owner-only (0600) and replaced atomically; a file that exists but cannot
-/// be parsed is an error rather than silently treated as empty, so one bad byte cannot wipe stored keys.
+/// any system location). On Unix, the file is created owner-only (0600); elsewhere it inherits the parent directory's
+/// permissions. It is replaced atomically; a file that exists but cannot be parsed is an error rather than silently
+/// treated as empty, so one bad byte cannot wipe stored keys.
 pub struct FileStore {
     path: std::path::PathBuf,
     map: Mutex<HashMap<String, String>>,
@@ -117,14 +118,14 @@ impl FileStore {
     /// Atomic read-modify-write shared with other processes (several processes may use the same file): take an
     /// exclusive advisory lock on a sidecar file, re-read the file, apply `change`, write it back. Returns the new map.
     fn update(&self, change: impl FnOnce(&mut HashMap<String, String>)) -> Result<HashMap<String, String>, String> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let lock = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(self.path.with_extension("lock"))
-            .map_err(|e| e.to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options.open(self.path.with_extension("lock")).map_err(|e| e.to_string())?;
         lock.lock().map_err(|e| e.to_string())?; // released when `lock` is dropped
         let mut map = Self::read(&self.path)?;
         change(&mut map);
@@ -134,7 +135,6 @@ impl FileStore {
 
     fn flush(&self, map: &HashMap<String, String>) -> Result<(), String> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let tmp = self.path.with_extension("tmp");
         let json = serde_json::to_vec(map).map_err(|e| e.to_string())?;
         // A stale or planted temp file (loose mode, symlink) must not be reused: remove it, then create exclusively.
@@ -143,12 +143,14 @@ impl FileStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
         }
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)
-            .map_err(|e| e.to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp).map_err(|e| e.to_string())?;
         f.write_all(&json).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
         if let Some(dir) = self.path.parent() {
@@ -189,6 +191,7 @@ impl SecretStore for FileStore {
 #[cfg(test)]
 mod file_tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -201,6 +204,7 @@ mod file_tests {
         s.set("b", "2").unwrap();
         s.delete("b").unwrap();
         s.delete("never-existed").unwrap();
+        #[cfg(unix)]
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
         assert!(!p.with_extension("tmp").exists(), "temp file is renamed away");
         let again = FileStore::open(&p).unwrap();

@@ -248,7 +248,7 @@ pub fn scan(opts: &ScanOptions) -> io::Result<Vec<Console>> {
                     }
                 }
                 Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Ok(()),
-                Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {}
+                Err(e) if matches!(e.kind(), io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -331,7 +331,7 @@ fn listen_until(sock: &UdpSocket, until: Instant) -> io::Result<Option<SocketAdd
         match sock.recv_from(&mut buf) {
             Ok((_, from)) => return Ok(Some(from)),
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Ok(None),
-            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {} // ICMP from an earlier send: keep listening
+            Err(e) if matches!(e.kind(), io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset) => {} // ICMP from an earlier send: keep listening
             Err(e) => return Err(e),
         }
     }

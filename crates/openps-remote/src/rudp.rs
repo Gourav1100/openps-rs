@@ -266,6 +266,9 @@ impl Wire for UdpWire {
                 }
                 Ok(_) => {}
                 Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Ok(None),
+                // ICMP "port unreachable" from an earlier probe to another candidate: Windows reports it on the next receive of an
+                // unconnected socket (WSAECONNRESET), macOS/Linux as refused. It says nothing about the peer; keep waiting.
+                Err(e) if matches!(e.kind(), io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused) => {}
                 Err(e) => return Err(e),
             }
         }

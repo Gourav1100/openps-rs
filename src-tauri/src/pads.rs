@@ -18,13 +18,13 @@ static APP: OnceLock<AppHandle> = OnceLock::new();
 pub struct PadState {
     arbiter: Mutex<Arbiter>,
     hid: HidOut,
-    look: openps_metal::look::SharedLook,
+    look: openps_render::look::SharedLook,
     _source: Mutex<Option<MacPads>>,
     deadzone: Mutex<f64>,
 }
 
 impl PadState {
-    pub fn new(look: openps_metal::look::SharedLook) -> Self {
+    pub fn new(look: openps_render::look::SharedLook) -> Self {
         Self {
             arbiter: Mutex::new(Arbiter::default()),
             hid: HidOut::start(),
@@ -106,7 +106,7 @@ fn apply(app: &AppHandle, cmds: &[PadCmd]) {
                 log_state(*slot, state);
                 if *slot == 0 {
                     if let Some(st) = &st {
-                        st.look.push(openps_metal::now(), state.right_x as f32, state.right_y as f32);
+                        st.look.push(openps_render::now(), state.right_x as f32, state.right_y as f32);
                     }
                 }
                 core.set_pad_slot(*slot, state.clone())

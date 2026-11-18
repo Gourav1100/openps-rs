@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct InputState {
     pub hub: Arc<InputHub>,
     /// Right-stick values sent to the console, timestamped: the renderer's camera compensation integrates them.
-    look: openps_metal::look::SharedLook,
+    look: openps_render::look::SharedLook,
     runner: Mutex<Option<InputRunner>>,
     config_path: PathBuf,
     /// What the scene detector sees and what the key map presses: shared by the engine and the detector's thread.
@@ -29,7 +29,7 @@ pub struct InputState {
 }
 
 impl InputState {
-    pub fn new(app: &AppHandle, data_dir: &Path, look: openps_metal::look::SharedLook) -> Self {
+    pub fn new(app: &AppHandle, data_dir: &Path, look: openps_render::look::SharedLook) -> Self {
         let scene = Arc::new(SceneLink::new());
         let handle = app.clone();
         let notify = move || {
@@ -54,7 +54,7 @@ impl InputState {
 
 struct AppOutput {
     app: AppHandle,
-    look: openps_metal::look::SharedLook,
+    look: openps_render::look::SharedLook,
 }
 
 /// The on-screen PS button. It is merged into whatever the key map sends, so the two never fight over the pad state.
@@ -100,7 +100,7 @@ impl Output for AppOutput {
         if crate::pads::controller_active(&self.app) {
             return; // the physical pad owns the console until Controls is pressed (and is what the camera follows: pads.rs records it)
         }
-        self.look.push(openps_metal::now(), state.right_x as f32, state.right_y as f32);
+        self.look.push(openps_render::now(), state.right_x as f32, state.right_y as f32);
         if let Some(core) = self.app.try_state::<Core>() {
             let _ = core.set_pad(with_ps(state.clone())); // NotConnected between sessions is expected
         }
@@ -201,11 +201,12 @@ fn start(app: &AppHandle) {
 fn stop(app: &AppHandle) {
     let Some(st) = app.try_state::<InputState>() else { return };
     let r = st.runner.lock().unwrap_or_else(PoisonError::into_inner).take();
-    st.scene.set_enabled(false); // detection is a switch for the stream that is running
     clear_pad_memory();
     if let Some(r) = r {
         r.stop(); // releases the cursor and sends a neutral pad
     }
+    // Join the engine first: its final poll must not re-enable detection after shutdown.
+    st.scene.set_enabled(false);
 }
 
 /// Hook for every core event: input runs exactly while a session is connected.
@@ -213,10 +214,16 @@ pub fn on_event(app: &AppHandle, ev: &AppEvent) {
     if let AppEvent::Session(s) = ev {
         match s {
             SessionState::Connected { .. } => {
+                if let Some(st) = app.try_state::<InputState>() {
+                    st.scene.clear_scene();
+                }
                 start(app);
                 crate::pads::session_started(app);
             }
             SessionState::Closed { .. } | SessionState::Failed { .. } | SessionState::Idle => {
+                if let Some(st) = app.try_state::<InputState>() {
+                    st.scene.set_active(false);
+                }
                 stop(app);
                 crate::pads::session_ended(app);
             }

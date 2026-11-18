@@ -1,0 +1,48 @@
+services:
+  linux-test:
+    build:
+      context: .
+      target: linux
+    volumes:
+      - linux-build:/build
+    command:
+      - sh
+      - -ec
+      - |
+        node --test tests/*.test.js
+        cargo test --locked --workspace -- --test-threads=2
+
+  linux-build:
+    build:
+      context: .
+      target: linux
+    user: root
+    volumes:
+      - linux-build:/build
+      - ./artifacts/linux:/artifacts
+    command:
+      - sh
+      - -ec
+      - |
+        runuser -u builder -- cargo build --locked -p openps-app --features tauri/custom-protocol,psn-live
+        cp /build/target/debug/openps-app /artifacts/openps-app
+
+  windows-build:
+    build:
+      context: .
+      target: windows
+    user: root
+    volumes:
+      - windows-build:/build
+      - ./artifacts/windows:/artifacts
+    command:
+      - sh
+      - -ec
+      - |
+        runuser -u builder -- cargo xwin check --locked --target x86_64-pc-windows-msvc --workspace --tests
+        runuser -u builder -- cargo xwin build --locked --target x86_64-pc-windows-msvc -p openps-app --features tauri/custom-protocol,psn-live
+        cp /build/target/x86_64-pc-windows-msvc/debug/openps-app.exe /artifacts/openps-app.exe
+
+volumes:
+  linux-build:
+  windows-build:

@@ -7,13 +7,13 @@ use crate::encoder::{self, Encoder};
 use crate::filter::{Params, SceneFilter};
 use crate::probe::Probe;
 use crate::{find_models_dir, PROBE_FILE};
-use openps_input::scene::{Action, DetectorState, SceneLink};
+use openps_input::scene::{Action, SceneLink, MAX_SCENE_AGE_S};
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often a picture is looked at. The model takes about 5 ms; the filter is made for pictures seconds apart.
 pub const PICTURE_INTERVAL_S: f64 = 0.5;
@@ -35,6 +35,7 @@ struct Picture {
     buffer: *const c_void,
     /// When it was taken, on the link's clock.
     at: f64,
+    generation: u64,
 }
 
 // CoreVideo buffers are reference counted and safe to hand across threads.
@@ -125,7 +126,8 @@ impl SceneService {
     /// `buffer` must be a valid `CVPixelBufferRef`.
     pub unsafe fn offer(&self, buffer: *const c_void) {
         let s = &self.shared;
-        if buffer.is_null() || !s.link.running() {
+        let generation = s.link.generation();
+        if buffer.is_null() || !s.link.running() || s.stop.load(Ordering::Relaxed) {
             return;
         }
         let now = s.link.now();
@@ -133,7 +135,7 @@ impl SceneService {
             return;
         }
         s.last_offer.store(now.to_bits(), Ordering::Relaxed);
-        let picture = Picture { buffer: CFRetain(buffer), at: now };
+        let picture = Picture { buffer: CFRetain(buffer), at: now, generation };
         *s.slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(picture); // a picture still waiting is replaced
         s.wake.notify_one();
     }
@@ -142,6 +144,7 @@ impl SceneService {
     /// interrupted, so it is not waited for: the thread ends by itself and the app's exit is not held up.
     pub fn stop(&self) {
         self.shared.stop.store(true, Ordering::Relaxed);
+        self.shared.link.clear_scene();
         self.shared.wake.notify_all();
         let join = self.join.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(j) = join.filter(|_| !self.shared.loading.load(Ordering::Relaxed)) {
@@ -177,12 +180,12 @@ fn load(s: &Shared) -> Result<Loaded, String> {
     Ok(Loaded { encoder, probe })
 }
 
-fn run(s: &Shared, on_loaded: Option<OnLoaded>) {
+fn run(s: &Shared, mut on_loaded: Option<OnLoaded>) {
     let link = &s.link;
     // loaded as the app starts, so switching detection on (F10 in a profile that uses it) finds the model ready; at low priority and on
     // this thread only, so the window, the stream and the input never wait for it
     unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
-    let (loaded, failure) = match load(s) {
+    let (mut loaded, mut failure) = match load(s) {
         Ok(l) => (Some(l), None),
         Err(_) if s.stop.load(Ordering::Relaxed) => {
             s.loading.store(false, Ordering::Relaxed);
@@ -197,12 +200,15 @@ fn run(s: &Shared, on_loaded: Option<OnLoaded>) {
     s.loading.store(false, Ordering::Relaxed);
     if loaded.is_some() {
         s.ready.store(true, Ordering::Relaxed);
-        if let Some(notify) = on_loaded {
+        if let Some(notify) = on_loaded.take() {
             notify();
         }
     }
     let mut filter = SceneFilter::new(Params::default());
     let mut was_running = false;
+    let mut generation = link.generation();
+    let mut last_picture_at: Option<f64> = None;
+    let mut last_load_attempt = Instant::now();
     loop {
         let picture = {
             let mut slot = s.slot.lock().unwrap_or_else(PoisonError::into_inner);
@@ -221,25 +227,56 @@ fn run(s: &Shared, on_loaded: Option<OnLoaded>) {
             }
             continue; // a picture taken just before it was switched off, or while a controller drives, is dropped
         }
+        // Retry missing/corrupt/unavailable models at a bounded rate, off the media thread.
+        if loaded.is_none() && last_load_attempt.elapsed() >= Duration::from_secs(30) {
+            last_load_attempt = Instant::now();
+            s.loading.store(true, Ordering::Relaxed);
+            let retry = load(s);
+            s.loading.store(false, Ordering::Relaxed);
+            if s.stop.load(Ordering::Relaxed) { return; }
+            match retry {
+                Ok(model) => {
+                    loaded = Some(model);
+                    failure = None;
+                    s.ready.store(true, Ordering::Relaxed);
+                    if let Some(notify) = on_loaded.take() { notify(); }
+                }
+                Err(error) => failure = Some(error),
+            }
+            was_running = false;
+        }
+        if generation != link.generation() {
+            generation = link.generation();
+            filter.reset();
+            was_running = false;
+        }
         if !was_running {
             was_running = true;
             filter.reset();
             if let Some(e) = &failure {
-                link.publish_state(DetectorState::Unavailable, e);
+                link.fail_if_current(generation, e);
             }
         }
         let (Some(l), Some(picture)) = (loaded.as_ref(), picture) else { continue };
+        if picture.generation != generation || link.now() - picture.at > MAX_SCENE_AGE_S { continue; }
+        if last_picture_at.is_some_and(|at| picture.at - at > MAX_SCENE_AGE_S) { filter.reset(); }
+        last_picture_at = Some(picture.at);
         let embedding = match unsafe { l.encoder.embed_pixel_buffer(picture.buffer) } {
             Ok(e) if e.len() == l.probe.dim() => e,
             Ok(e) => {
+                link.fail_if_current(picture.generation, "Scene model output dimensions do not match the probe");
+                filter.reset();
                 log::warn!("scene detection: the model gave {} numbers, the probe reads {}", e.len(), l.probe.dim());
                 continue;
             }
             Err(e) => {
+                link.fail_if_current(picture.generation, &e);
+                filter.reset();
                 log::warn!("scene detection: {e}");
                 continue;
             }
         };
+        if s.stop.load(Ordering::Relaxed) || picture.generation != link.generation() { continue; }
         for a in Action::ALL {
             filter.set_available(a, link.is_labeled(a));
         }
@@ -248,9 +285,7 @@ fn run(s: &Shared, on_loaded: Option<OnLoaded>) {
             filter.push_action(t, a);
         }
         let estimate = filter.update(picture.at, l.probe.context(&embedding), l.probe.view(&embedding));
-        if link.running() {
-            link.publish_scene(estimate.context, estimate.view, estimate.confidence);
-            link.publish_state(DetectorState::Running, "");
-        }
+        link.publish_if_current(picture.generation, picture.at,
+            estimate.context, estimate.view, estimate.confidence);
     }
 }

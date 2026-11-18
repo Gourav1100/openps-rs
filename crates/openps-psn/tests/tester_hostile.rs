@@ -873,6 +873,7 @@ fn two_file_store_instances_must_not_lose_each_others_entries() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_stale_loose_temp_file_must_not_make_the_secrets_file_world_readable() {
     use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
@@ -886,6 +887,7 @@ fn a_stale_loose_temp_file_must_not_make_the_secrets_file_world_readable() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlinked_temp_file_must_not_receive_the_secrets() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("secrets.json");

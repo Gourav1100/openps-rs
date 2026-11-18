@@ -1,5 +1,19 @@
 # Release notes
 
+## 0.5.0 — Desktop portability
+
+### Added
+
+- **Linux and Windows development builds.** Docker builds Linux and Windows executables with Cargo's development profile; `build-all.sh` also creates a native macOS release DMG. CI checks the portable components on Linux, Windows and macOS.
+- **Network console pairing.** The Add console dialog offers PSN registration for discovered PS5 consoles or pairing with a code.
+
+### Changed
+
+- **Sign-in and loading.** Loading indicators cover the PSN sign-in window and game library while they load. Unsupported settings are hidden.
+- **Windows networking.** Discovery and remote-play receive loops tolerate Windows UDP connection resets. Native Windows PSN and console testing is still needed.
+
+Linux and Windows builds do not yet have full Remote Play parity with macOS; see the platform limits in `README.md`.
+
 ## 0.4.0 — Key maps that follow the scene
 
 ### Added

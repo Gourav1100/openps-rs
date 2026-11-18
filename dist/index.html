@@ -1347,6 +1347,7 @@
                 <svg aria-hidden="true"><use href="#i-chev-r" /></svg>
               </button>
             </div>
+            <div id="games-skel" class="games-skel" aria-hidden="true" hidden></div>
             <div id="games-prompt" class="notice" hidden></div>
           </section>
           <div id="nearby-wrap" hidden>
@@ -1741,219 +1742,221 @@
             PS4 consoles always stream H.264 regardless of the codec setting.
           </p>
 
-          <div class="section-head mt">
-            <div>
-              <h2>Controls</h2>
-              <p class="muted">
-                Choose how to play while streaming. F10 switches between a
-                connected controller and keyboard and mouse.
-              </p>
-            </div>
-          </div>
-          <div class="card form">
-            <fieldset class="field controller-setting">
-              <legend>Connected controllers</legend>
-              <ul
-                id="controller-list"
-                class="controller-list"
-                aria-live="polite"
-                aria-busy="true"
-              >
-                <li class="muted">Checking for controllers…</li>
-              </ul>
-            </fieldset>
-            <div class="field controller-setting">
-              <div class="setting-head">
-                <label for="controller-deadzone">Stick deadzone</label>
-                <span class="help"
-                  ><button
-                    class="help-btn"
-                    type="button"
-                    aria-label="About the stick deadzone"
-                    aria-expanded="false"
-                    aria-controls="deadzone-help"
-                  >
-                    ?</button
-                  ><span class="help-pop" id="deadzone-help" role="tooltip"
-                    >Ignores small stick movements around the centre. Applies to
-                    connected controllers immediately.</span
-                  ></span
-                >
-                <output id="controller-deadzone-out" for="controller-deadzone"
-                  >8%</output
-                >
+          <div id="controls-section">
+            <div class="section-head mt">
+              <div>
+                <h2>Controls</h2>
+                <p class="muted">
+                  Choose how to play while streaming. F10 switches between a
+                  connected controller and keyboard and mouse.
+                </p>
               </div>
-              <input
-                id="controller-deadzone"
-                class="range"
-                type="range"
-                min="0"
-                max="0.5"
-                step="0.01"
-                value="0.08"
-                aria-describedby="deadzone-help"
-              />
             </div>
-            <div class="field controller-setting tune-field">
-              <div class="setting-head">
-                <span class="label" id="rumble-label">Rumble strength</span>
-                <span class="help"
-                  ><button
-                    class="help-btn"
-                    type="button"
-                    aria-label="About rumble strength and its test"
-                    aria-expanded="false"
-                    aria-controls="rumble-help"
-                  >
-                    ?</button
-                  ><span class="help-pop" id="rumble-help" role="tooltip"
-                    >Scales the vibration a game asks for, and the haptics. 100%
-                    is as the game asks; higher is stronger, up to the
-                    controller's maximum. The test buzzes the controller for a
-                    moment. DualSense only.</span
-                  ></span
+            <div class="card form">
+              <fieldset class="field controller-setting">
+                <legend>Connected controllers</legend>
+                <ul
+                  id="controller-list"
+                  class="controller-list"
+                  aria-live="polite"
+                  aria-busy="true"
                 >
+                  <li class="muted">Checking for controllers…</li>
+                </ul>
+              </fieldset>
+              <div class="field controller-setting">
+                <div class="setting-head">
+                  <label for="controller-deadzone">Stick deadzone</label>
+                  <span class="help"
+                    ><button
+                      class="help-btn"
+                      type="button"
+                      aria-label="About the stick deadzone"
+                      aria-expanded="false"
+                      aria-controls="deadzone-help"
+                    >
+                      ?</button
+                    ><span class="help-pop" id="deadzone-help" role="tooltip"
+                      >Ignores small stick movements around the centre. Applies to
+                      connected controllers immediately.</span
+                    ></span
+                  >
+                  <output id="controller-deadzone-out" for="controller-deadzone"
+                    >8%</output
+                  >
+                </div>
+                <input
+                  id="controller-deadzone"
+                  class="range"
+                  type="range"
+                  min="0"
+                  max="0.5"
+                  step="0.01"
+                  value="0.08"
+                  aria-describedby="deadzone-help"
+                />
               </div>
-              <div class="tune">
-                <div
-                  class="stepper"
-                  role="group"
-                  aria-labelledby="rumble-label"
-                >
-                  <button
-                    id="rumble-dec"
-                    class="btn btn-ghost btn-sm btn-icon"
-                    type="button"
-                    aria-label="Decrease rumble strength"
-                    title="Decrease"
+              <div class="field controller-setting tune-field">
+                <div class="setting-head">
+                  <span class="label" id="rumble-label">Rumble strength</span>
+                  <span class="help"
+                    ><button
+                      class="help-btn"
+                      type="button"
+                      aria-label="About rumble strength and its test"
+                      aria-expanded="false"
+                      aria-controls="rumble-help"
+                    >
+                      ?</button
+                    ><span class="help-pop" id="rumble-help" role="tooltip"
+                      >Scales the vibration a game asks for, and the haptics. 100%
+                      is as the game asks; higher is stronger, up to the
+                      controller's maximum. The test buzzes the controller for a
+                      moment. DualSense only.</span
+                    ></span
                   >
-                    <svg aria-hidden="true"><use href="#i-minus" /></svg>
-                  </button>
-                  <span class="meter" aria-hidden="true"
-                    ><i id="rumble-meter"></i
-                  ></span>
-                  <output id="rumble-out" aria-live="polite">100%</output>
-                  <button
-                    id="rumble-inc"
-                    class="btn btn-ghost btn-sm btn-icon"
-                    type="button"
-                    aria-label="Increase rumble strength"
-                    title="Increase"
+                </div>
+                <div class="tune">
+                  <div
+                    class="stepper"
+                    role="group"
+                    aria-labelledby="rumble-label"
                   >
-                    <svg aria-hidden="true"><use href="#i-plus" /></svg>
+                    <button
+                      id="rumble-dec"
+                      class="btn btn-ghost btn-sm btn-icon"
+                      type="button"
+                      aria-label="Decrease rumble strength"
+                      title="Decrease"
+                    >
+                      <svg aria-hidden="true"><use href="#i-minus" /></svg>
+                    </button>
+                    <span class="meter" aria-hidden="true"
+                      ><i id="rumble-meter"></i
+                    ></span>
+                    <output id="rumble-out" aria-live="polite">100%</output>
+                    <button
+                      id="rumble-inc"
+                      class="btn btn-ghost btn-sm btn-icon"
+                      type="button"
+                      aria-label="Increase rumble strength"
+                      title="Increase"
+                    >
+                      <svg aria-hidden="true"><use href="#i-plus" /></svg>
+                    </button>
+                  </div>
+                  <button
+                    id="rumble-test"
+                    class="btn btn-sm btn-icon test-btn"
+                    type="button"
+                    aria-label="Test rumble"
+                    title="Test rumble"
+                  >
+                    <svg aria-hidden="true"><use href="#i-vibrate" /></svg>
                   </button>
                 </div>
-                <button
-                  id="rumble-test"
-                  class="btn btn-sm btn-icon test-btn"
-                  type="button"
-                  aria-label="Test rumble"
-                  title="Test rumble"
-                >
-                  <svg aria-hidden="true"><use href="#i-vibrate" /></svg>
-                </button>
               </div>
-            </div>
-            <div class="field controller-setting tune-field">
-              <div class="setting-head">
-                <span class="label" id="trigger-label"
-                  >Adaptive trigger strength</span
-                >
-                <span class="help"
-                  ><button
-                    class="help-btn"
-                    type="button"
-                    aria-label="About adaptive trigger strength and its test"
-                    aria-expanded="false"
-                    aria-controls="trigger-help"
+              <div class="field controller-setting tune-field">
+                <div class="setting-head">
+                  <span class="label" id="trigger-label"
+                    >Adaptive trigger strength</span
                   >
-                    ?</button
-                  ><span class="help-pop" id="trigger-help" role="tooltip"
-                    >How hard the triggers push back. 100% is the controller's
-                    full power and it cannot go higher; lower weakens every
-                    effect. Together with the console's own setting, the weaker
-                    of the two applies. The test holds a resistance for 4
-                    seconds: press the triggers to feel it. DualSense
-                    only.</span
-                  ></span
-                >
-              </div>
-              <div class="tune">
-                <div
-                  class="stepper"
-                  role="group"
-                  aria-labelledby="trigger-label"
-                >
+                  <span class="help"
+                    ><button
+                      class="help-btn"
+                      type="button"
+                      aria-label="About adaptive trigger strength and its test"
+                      aria-expanded="false"
+                      aria-controls="trigger-help"
+                    >
+                      ?</button
+                    ><span class="help-pop" id="trigger-help" role="tooltip"
+                      >How hard the triggers push back. 100% is the controller's
+                      full power and it cannot go higher; lower weakens every
+                      effect. Together with the console's own setting, the weaker
+                      of the two applies. The test holds a resistance for 4
+                      seconds: press the triggers to feel it. DualSense
+                      only.</span
+                    ></span
+                  >
+                </div>
+                <div class="tune">
+                  <div
+                    class="stepper"
+                    role="group"
+                    aria-labelledby="trigger-label"
+                  >
+                    <button
+                      id="trigger-dec"
+                      class="btn btn-ghost btn-sm btn-icon"
+                      type="button"
+                      aria-label="Decrease adaptive trigger strength"
+                      title="Decrease"
+                    >
+                      <svg aria-hidden="true"><use href="#i-minus" /></svg>
+                    </button>
+                    <span class="meter" aria-hidden="true"
+                      ><i id="trigger-meter"></i
+                    ></span>
+                    <output id="trigger-out" aria-live="polite">100%</output>
+                    <button
+                      id="trigger-inc"
+                      class="btn btn-ghost btn-sm btn-icon"
+                      type="button"
+                      aria-label="Increase adaptive trigger strength"
+                      title="Increase"
+                    >
+                      <svg aria-hidden="true"><use href="#i-plus" /></svg>
+                    </button>
+                  </div>
                   <button
-                    id="trigger-dec"
-                    class="btn btn-ghost btn-sm btn-icon"
+                    id="trigger-test"
+                    class="btn btn-sm btn-icon test-btn"
                     type="button"
-                    aria-label="Decrease adaptive trigger strength"
-                    title="Decrease"
+                    aria-label="Test adaptive triggers"
+                    title="Test adaptive triggers"
                   >
-                    <svg aria-hidden="true"><use href="#i-minus" /></svg>
-                  </button>
-                  <span class="meter" aria-hidden="true"
-                    ><i id="trigger-meter"></i
-                  ></span>
-                  <output id="trigger-out" aria-live="polite">100%</output>
-                  <button
-                    id="trigger-inc"
-                    class="btn btn-ghost btn-sm btn-icon"
-                    type="button"
-                    aria-label="Increase adaptive trigger strength"
-                    title="Increase"
-                  >
-                    <svg aria-hidden="true"><use href="#i-plus" /></svg>
+                    <svg aria-hidden="true"><use href="#i-press" /></svg>
                   </button>
                 </div>
-                <button
-                  id="trigger-test"
-                  class="btn btn-sm btn-icon test-btn"
-                  type="button"
-                  aria-label="Test adaptive triggers"
-                  title="Test adaptive triggers"
-                >
-                  <svg aria-hidden="true"><use href="#i-press" /></svg>
-                </button>
               </div>
-            </div>
-            <dl class="keys" id="shortcuts">
-              <div>
-                <dt><kbd>F10</kbd></dt>
-                <dd>Keyboard and mouse on / off</dd>
-              </div>
-              <div>
-                <dt><kbd>F7</kbd></dt>
-                <dd>Next key profile</dd>
-              </div>
-              <div>
-                <dt><kbd>Cmd</kbd> + <kbd>F1</kbd>…<kbd>F6</kbd></dt>
-                <dd>Pick profile 1 to 6</dd>
-              </div>
-              <div>
-                <dt><kbd>F8</kbd></dt>
-                <dd>Show the key map and change keys</dd>
-              </div>
-              <div>
-                <dt><kbd>F12</kbd></dt>
-                <dd>End the stream (the app stays open)</dd>
-              </div>
-              <div>
-                <dt><kbd>F11</kbd></dt>
-                <dd>Panic: release everything and close OpenPS</dd>
-              </div>
-            </dl>
-            <div class="field">
-              <span class="label">Key map file</span>
-              <p class="hint" id="keymap-state">Checking…</p>
-              <div class="row-actions">
-                <button id="keymap-show" class="btn" type="button">
-                  Show in folder
-                </button>
-                <button id="keymap-reset" class="btn btn-ghost" type="button">
-                  Reset to defaults
-                </button>
+              <dl class="keys" id="shortcuts">
+                <div>
+                  <dt><kbd>F10</kbd></dt>
+                  <dd>Keyboard and mouse on / off</dd>
+                </div>
+                <div>
+                  <dt><kbd>F7</kbd></dt>
+                  <dd>Next key profile</dd>
+                </div>
+                <div>
+                  <dt><kbd>Cmd</kbd> + <kbd>F1</kbd>…<kbd>F6</kbd></dt>
+                  <dd>Pick profile 1 to 6</dd>
+                </div>
+                <div>
+                  <dt><kbd>F8</kbd></dt>
+                  <dd>Show the key map and change keys</dd>
+                </div>
+                <div>
+                  <dt><kbd>F12</kbd></dt>
+                  <dd>End the stream (the app stays open)</dd>
+                </div>
+                <div>
+                  <dt><kbd>F11</kbd></dt>
+                  <dd>Panic: release everything and close OpenPS</dd>
+                </div>
+              </dl>
+              <div class="field">
+                <span class="label">Key map file</span>
+                <p class="hint" id="keymap-state">Checking…</p>
+                <div class="row-actions">
+                  <button id="keymap-show" class="btn" type="button">
+                    Show in folder
+                  </button>
+                  <button id="keymap-reset" class="btn btn-ghost" type="button">
+                    Reset to defaults
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2467,6 +2470,15 @@
       </div>
     </dialog>
 
+    <!-- Waiting for the PSN sign-in page (it opens in its own window once loaded) -->
+    <dialog id="psn-wait" class="wait-dlg" aria-labelledby="psn-wait-title">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="psn-wait-title" role="status">
+        <strong>Opening PlayStation sign-in…</strong>
+      </p>
+      <p class="muted small">Sony's page can take a few seconds to load.</p>
+    </dialog>
+
     <!-- Pairing wizard -->
     <dialog id="pair-dialog" aria-labelledby="pair-title">
       <form method="dialog" id="pair-form" novalidate>
@@ -2490,12 +2502,13 @@
         <div class="dlg-body" data-step="find">
           <section class="pair-sec" aria-labelledby="pair-auto-h">
             <h3 id="pair-auto-h" class="pair-h">Automatic</h3>
-            <div class="field" id="pair-psn" hidden>
-              <span class="label">From your PlayStation account</span>
+            <div class="field">
+              <span class="label">Found on your network</span>
               <div
-                id="pair-psn-list"
+                id="pair-list"
                 class="pick"
-                aria-label="Consoles on your account"
+                aria-live="polite"
+                aria-label="Consoles found"
               ></div>
               <div id="pair-psn-run" class="remote-run" hidden>
                 <div class="spinner small" aria-hidden="true"></div>
@@ -2509,16 +2522,6 @@
                 </button>
               </div>
               <p id="pair-psn-error" class="error" role="alert" hidden></p>
-            </div>
-            <div class="field">
-              <span class="label">Found on your network</span>
-              <div
-                id="pair-list"
-                class="pick"
-                aria-live="polite"
-                role="radiogroup"
-                aria-label="Consoles found"
-              ></div>
             </div>
           </section>
           <section class="pair-sec" aria-labelledby="pair-man-h">

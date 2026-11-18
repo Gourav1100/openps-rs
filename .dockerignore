@@ -1,0 +1,25 @@
+# Only source and test inputs enter the build context, never local app data.
+**
+!Cargo.toml
+!Cargo.lock
+!.cargo/
+!.cargo/config.toml
+!crates/
+!crates/**
+!src-tauri/
+!src-tauri/**
+!dist/
+!dist/**
+!tests/
+!tests/**
+**/target/
+**/node_modules/
+**/openps-data/
+**/captures/
+**/.env*
+**/*.pem
+**/*.key
+**/psn.json
+**/tables.json
+**/*.tmp
+**/.DS_Store

@@ -1,0 +1,12 @@
+[package]
+name = "openps-input-host"
+version.workspace = true
+edition.workspace = true
+description = "Portable input runner, event hub and host interfaces"
+
+[dependencies]
+openps-input = { path = "../openps-input" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

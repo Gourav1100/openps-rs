@@ -6,6 +6,8 @@ description = "Metal presentation: MetalFX upscaling to 1440p/4K and motion-comp
 build = "build.rs"
 
 [dependencies]
+openps-render = { path = "../openps-render" }
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = "0.3"

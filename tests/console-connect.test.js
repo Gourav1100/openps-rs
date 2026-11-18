@@ -40,3 +40,16 @@ test("a discovered console remains connectable when no other lock applies", () =
 
   assert.equal(isConsoleLocked(state, () => false)("ps5-a"), false);
 });
+
+test("a console found on the network is matched to the PSN account by name, or as the only console there", () => {
+  const source = app.match(/function accountConsoleFor\(d, found\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(source, "accountConsoleFor exists");
+  const match = new Function(`${source}; return accountConsoleFor;`)();
+  const a = { duid: "A", name: "Living Room PS5" }, b = { duid: "B", name: "Bedroom" };
+
+  assert.equal(match({ name: " living room ps5 " }, [b, a]), a);
+  assert.equal(match({ name: "Office" }, [a]), a);
+  assert.equal(match({ name: "Office" }, [a, b]), null);
+  assert.equal(match({ name: "" }, [a, b]), null);
+  assert.equal(match({ name: "Office" }, []), null);
+});

@@ -3,7 +3,9 @@
 //! SAME network segment this looks at the link that reaches it: wired Ethernet speed, or the Wi-Fi rate, and asks for a large share.
 //! A console behind a router (or an unknown link) keeps the conservative default: never ask more than the path is known to carry.
 
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
 /// Highest request ever made (100 Mbit/s: the most the original accepts; a real PS5 ended the stream when asked for 800).
@@ -105,6 +107,7 @@ pub fn parse_wifi_rate(json: &str, iface: &str) -> Option<u32> {
 // ---- probing (macOS) --------------------------------------------------------------------------------------------------------------
 
 /// Run a system tool with fixed arguments and a time limit; `None` on any problem.
+#[cfg(target_os = "macos")]
 fn run(program: &str, args: &[&str], limit: Duration) -> Option<String> {
     let mut child = Command::new(program)
         .args(args)
@@ -134,6 +137,7 @@ fn run(program: &str, args: &[&str], limit: Duration) -> Option<String> {
 }
 
 /// The link that reaches `host` (an IP address). Only fixed system tools are run; `host` was validated by the caller.
+#[cfg(target_os = "macos")]
 pub fn probe(host: &str) -> Option<Link> {
     if host.parse::<std::net::IpAddr>().is_err() {
         return None; // a hostname could resolve anywhere: do not guess
@@ -150,6 +154,10 @@ pub fn probe(host: &str) -> Option<Link> {
     let medium = if mbps.is_some() { Medium::Wired } else { Medium::Unknown };
     Some(Link { interface, medium, mbps, direct })
 }
+
+/// Unqualified platforms retain the conservative resolution-based bitrate.
+#[cfg(not(target_os = "macos"))]
+pub fn probe(_host: &str) -> Option<Link> { None }
 
 /// The bitrate Auto should request for `host`, with a log line saying why.
 pub fn auto_kbps_for(host: &str) -> Option<i32> {
@@ -176,6 +184,7 @@ pub fn auto_kbps_for(host: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     const ROUTE_DIRECT: &str = "   route to: 192.168.1.22\ndestination: 192.168.1.0\n       mask: 255.255.255.0\n  interface: en0\n      flags: <UP,DONE,CLONING,STATIC>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500      -391\n";
     const ROUTE_GATEWAY: &str = "   route to: 8.8.8.8\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n";

@@ -1,4 +1,5 @@
 pub mod camera;
+#[cfg(target_os = "macos")]
 pub mod gpu;
 pub mod ladder;
 pub mod look;

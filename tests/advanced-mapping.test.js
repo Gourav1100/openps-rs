@@ -125,3 +125,7 @@ test("each layer can be switched off for a game that has no use for it", () => {
   assert.match(app, /box\.disabled = on && inUse === 1;/, "the last layer in use stays on");
   for (const layer of ["on_foot", "in_vehicle", "in_menu"]) assert.match(css, new RegExp(`\\.ov-table\\.off-${layer} \\.col-${layer}`));
 });
+
+test("stale scene reports freshness instead of model loading", () => {
+  assert.deepEqual(sceneText({ enabled: true, state: "stale", context: null }), { text: "Waiting for a fresh picture…", tone: "warn" });
+});

@@ -53,15 +53,27 @@ fn mime_for(ext: &str) -> &'static str {
 
 /// Write through a temporary file so a crash never leaves a half-written cache entry; owner-only, like the rest of the data folder.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     if let Some(dir) = path.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(dir)?;
     }
     // a name no other writer uses: two callers for the same entry must not share one temporary file
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = path.with_extension(format!("{}.{n}.tmp", std::process::id()));
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(&tmp)?;
     let done = f.write_all(bytes).and_then(|()| f.sync_all()).and_then(|()| std::fs::rename(&tmp, path));
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -277,14 +289,17 @@ mod tests {
 
     #[test]
     fn written_files_are_private_and_replace_atomically() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("cache/art/x.png");
         write_private(&p, b"one").unwrap();
         write_private(&p, b"two").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"two");
-        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        }
         assert!(!p.with_extension("tmp").exists());
     }
 

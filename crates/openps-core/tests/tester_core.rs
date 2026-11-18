@@ -672,39 +672,25 @@ fn forget_removes_record_and_secrets_and_unknown_ids_are_reported() {
 
 // ---- store: corruption, partial writes, permissions -------------------------------------------------------------------------
 
-fn read_only_dir() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
-    use std::os::unix::fs::PermissionsExt;
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("state.json");
-    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
-    if std::fs::write(d.path().join("probe"), b"x").is_ok() {
-        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        return None; // running as root: permissions do not apply
-    }
-    Some((d, p))
-}
-fn restore(d: &tempfile::TempDir) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-}
-
 #[test]
 fn a_failed_save_is_an_error_and_leaves_no_temp_file() {
-    let Some((d, p)) = read_only_dir() else { return };
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("blocked/state.json");
     let mut s = ConsoleStore::open(&p).unwrap();
+    std::fs::write(p.parent().unwrap(), b"not a directory").unwrap();
     assert!(s.upsert(rec(MAC, None)).is_err());
-    restore(&d);
-    assert!(!d.path().join("state.json.tmp").exists());
+    assert!(!p.with_extension("json.tmp").exists());
     assert!(!p.exists());
 }
 
 #[test]
 fn a_failed_save_must_not_leave_the_change_in_memory() {
-    let Some((d, p)) = read_only_dir() else { panic!("cannot make a read-only dir (root?)") };
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("blocked/state.json");
     let mut s = ConsoleStore::open(&p).unwrap();
+    std::fs::write(p.parent().unwrap(), b"not a directory").unwrap();
     assert!(s.upsert(rec(MAC, None)).is_err());
     assert!(s.set_psn_account(Some(PsnAccountInfo { online_id: "x".into(), account_id: "1".into() })).is_err());
-    restore(&d);
     assert!(s.consoles().is_empty(), "memory says paired, disk says not");
     assert!(s.psn_account().is_none());
 }
@@ -756,16 +742,19 @@ fn a_truncated_or_hostile_state_file_is_an_error_and_is_left_for_recovery() {
 
 #[test]
 fn a_new_state_file_is_private_and_saves_are_visible_to_a_second_reader() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("deep/er/state.json");
     let mut s = ConsoleStore::open(&p).unwrap();
     s.upsert(rec(MAC, Some("10.0.0.1"))).unwrap();
+    #[cfg(unix)]
     assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
     assert_eq!(ConsoleStore::open(&p).unwrap().consoles().len(), 1);
 }
 
 #[test]
+#[cfg(unix)]
 fn a_stale_loose_temp_file_must_not_loosen_the_state_file() {
     use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();

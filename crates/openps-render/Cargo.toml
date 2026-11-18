@@ -1,0 +1,5 @@
+[package]
+name = "openps-render"
+version.workspace = true
+edition.workspace = true
+description = "Portable render timing, camera and adaptive quality policy"

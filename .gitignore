@@ -8,6 +8,7 @@ install/
 openps-data/
 *.class
 tasks/
+/artifacts/
 
 # video captures (OPENPS_VIDEO_CAPTURE): they contain the streamed picture
 /captures/

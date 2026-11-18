@@ -41,3 +41,18 @@ test("the Controls buttons label the current input mode accessibly", () => {
   assert.equal(elements["map-btn"].attributes["aria-label"], "Keys & mouse: on · default");
   assert.equal(use.attributes.href, "#i-mouse");
 });
+
+test("platforms without local input hide the Controls instead of calling missing commands", async () => {
+  const render = app.match(/async function renderControllerSettings\(\) \{[\s\S]*?\n\}/)?.[0];
+  const keymap = app.match(/async function paintKeymap\(\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render && keymap, "renderControllerSettings and paintKeymap exist");
+  const calls = [], toasts = [];
+  const run = new Function("$", "S", "call", "toast", `${render}; ${keymap}; return Promise.all([renderControllerSettings(), paintKeymap()]);`);
+  await run(() => { throw new Error("no element should be touched"); }, { info: { local_input: false } },
+    async (c) => { calls.push(c); return ["unknown command", null]; }, (m) => toasts.push(m));
+
+  assert.deepEqual(calls, []);
+  assert.deepEqual(toasts, []);
+  assert.match(html, /<div id="controls-section">/);
+  assert.match(app, /for \(const id of \["controls-section", "map-btn", "ps-btn"\]\) \$\(id\)\.hidden = S\.info\.local_input === false;/);
+});

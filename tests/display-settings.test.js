@@ -66,7 +66,8 @@ test("the engine choice is MetalFX or FSR and nothing of VideoToolbox's processo
 test("the frame interpolator is Built-in, MetalFX or Dynamic, below the frame mode", () => {
   assert.ok(html.indexOf('data-setting="frame_mode"') < html.indexOf('data-setting="interpolator"'), "below the frame mode");
   assert.match(html, /id="interp-hint"/);
-  assert.match(app, /\[\["builtin", "Built-in"\], \["metalfx", "MetalFX"\], \["dynamic", "Dynamic"\]\]/);
+  // MetalFX and Dynamic are only offered where MetalFX frame interpolation exists; elsewhere they are not shown at all
+  assert.match(app, /\[\["builtin", "Built-in"\], \.\.\.\(S\.info\.metalfx \? \[\["metalfx", "MetalFX"\], \["dynamic", "Dynamic"\]\] : \[\]\)\]/);
   assert.match(app, /save\(\{ interpolator: v \}\)/);
 });
 

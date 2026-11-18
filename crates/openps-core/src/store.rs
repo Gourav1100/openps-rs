@@ -55,13 +55,21 @@ impl ConsoleStore {
         write_file(&self.path, &self.data)
     }
 
-    /// One transaction: take the directory lock (shared with other processes using the same file), re-read the file so changes made elsewhere are kept, apply `change` to a copy, write it, and only
+    /// One transaction: take the directory lock (a sidecar file on Windows), re-read the file so changes made elsewhere are kept, apply `change` to a copy, write it, and only
     /// then adopt it. A failure at any step leaves memory as it was.
     fn update<T>(&mut self, change: impl FnOnce(&mut Persisted) -> T) -> Result<T, StoreError> {
         let err = |e: std::io::Error| StoreError(format!("{}: {e}", self.path.display()));
         let dir = self.path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(err)?;
+        #[cfg(not(windows))]
         let lock = std::fs::File::open(dir).map_err(err)?;
+        #[cfg(windows)]
+        let lock = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.path.with_extension("lock"))
+            .map_err(err)?;
         lock.lock().map_err(err)?; // released when `lock` is dropped
         let (mut work, dropped) = match read_file(&self.path)? {
             Some(d) => d,
@@ -254,13 +262,19 @@ fn write_file(path: &Path, data: &Persisted) -> Result<(), StoreError> {
 /// (possibly loose) permissions cannot carry over.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(path)?;
     f.write_all(bytes)?;
     f.sync_all()
 }
@@ -283,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_state_file_is_owner_only_and_a_pre_existing_loose_file_is_tightened() {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
@@ -354,11 +369,15 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut s = ConsoleStore::open(d.path().join("state.json")).unwrap();
         s.upsert(rec("A")).unwrap();
-        let names: Vec<String> = std::fs::read_dir(d.path())
+        let mut names: Vec<String> = std::fs::read_dir(d.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
+        names.sort();
+        #[cfg(not(windows))]
         assert_eq!(names, vec!["state.json"]);
+        #[cfg(windows)]
+        assert_eq!(names, vec!["state.json", "state.lock"]);
     }
 
     #[test]

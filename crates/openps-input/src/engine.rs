@@ -423,15 +423,18 @@ impl<P: Platform> Engine<P> {
     pub fn apply_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         self.sync();
+        self.sync_scene_configuration();
         self.beep(if enabled { "Pop" } else { "Basso" }, false);
     }
 
     fn switch_profile(&mut self, idx: usize) {
+        self.scene.clear_scene();
         self.drop_text_modes(); // a half-typed name / capture belongs to the old profile
         self.apply_exclusivity();
         self.profile_idx = idx % self.profiles.len();
         let name = self.profile().to_string();
         let _ = self.mapper.set_profile(&name);
+        self.sync_scene_configuration();
         self.platform.send_pad(&ControllerState::default()); // release anything held from the old layout
         self.beep("Glass", false);
         self.push_overlay();
@@ -533,10 +536,12 @@ impl<P: Platform> Engine<P> {
         let bumper = self.mapper.bumper();
         let mut mapper = Mapper::new(new.clone(), Some(&profiles[idx]))?;
         mapper.set_bumper(bumper); // RT/RB and LT/LB are a session choice: keep them
+        self.scene.clear_scene();
         self.cfg = new;
         self.profiles = profiles;
         self.profile_idx = idx;
         self.mapper = mapper;
+        self.sync_scene_configuration();
         self.platform.set_hotkeys(&chords);
         self.platform.cursor_set_hide(self.cfg.mouse.hide_cursor);
         self.apply_exclusivity();
@@ -714,16 +719,12 @@ impl<P: Platform> Engine<P> {
         self.labeled_down = down;
     }
 
-    /// Show the overlay and the HUD when what the detector believes changes (at most ten times a second).
-    fn poll_scene(&mut self, now: f64) {
-        if now - self.last_scene_poll < 0.1 {
-            return;
-        }
-        self.last_scene_poll = now;
+    /// Apply constraints at the transition, before a detector can publish for the new profile.
+    fn sync_scene_configuration(&self) {
         // advanced mapping is what switches scene detection on, and it only matters while the key map drives the console (with mapping
         // off a physical controller does)
         self.scene.set_enabled(self.advanced_on());
-        self.scene.set_active(self.enabled);
+        self.scene.set_active(self.live());
         self.scene.set_layers(self.cfg.advanced_of(self.profile()).map(Advanced::enabled_layers).unwrap_or_default());
         // only a key map that is live and has labels can say that nothing changed because nothing was pressed
         let labeled: Vec<Action> = match self.cfg.advanced_of(self.profile()) {
@@ -731,6 +732,15 @@ impl<P: Platform> Engine<P> {
             _ => vec![],
         };
         self.scene.set_labeled(labeled);
+    }
+
+    /// Show the overlay and the HUD when what the detector believes changes (at most ten times a second).
+    fn poll_scene(&mut self, now: f64) {
+        if now - self.last_scene_poll < 0.1 {
+            return;
+        }
+        self.last_scene_poll = now;
+        self.sync_scene_configuration();
         let status = self.scene.status();
         if status != self.last_scene {
             self.last_scene = status;

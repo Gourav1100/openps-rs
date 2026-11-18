@@ -42,6 +42,7 @@ fn is_transient(e: &io::Error) -> bool {
         io::ErrorKind::WouldBlock
             | io::ErrorKind::TimedOut
             | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset // Windows: WSAECONNRESET is its ICMP port-unreachable on UDP
             | io::ErrorKind::Interrupted
     ) {
         return true;
@@ -49,7 +50,9 @@ fn is_transient(e: &io::Error) -> bool {
     // (ENETUNREACH, EHOSTUNREACH, ENOBUFS) per platform
     #[cfg(target_os = "macos")]
     const TRANSIENT: [i32; 3] = [51, 65, 55];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    const TRANSIENT: [i32; 3] = [10051, 10065, 10055];
+    #[cfg(not(any(target_os = "macos", windows)))]
     const TRANSIENT: [i32; 3] = [101, 113, 105];
     e.raw_os_error().is_some_and(|c| TRANSIENT.contains(&c))
 }

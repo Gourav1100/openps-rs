@@ -6,6 +6,7 @@ description = "Keyboard/mouse input for the stream window: DOM events and CoreGr
 build = "build.rs"
 
 [dependencies]
+openps-input-host = { path = "../openps-input-host" }
 openps-input = { path = "../openps-input" }
 serde_json = "1"
 

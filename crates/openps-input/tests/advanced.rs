@@ -395,8 +395,8 @@ fn the_keys_follow_the_detected_scene() {
 #[test]
 fn a_scene_seen_before_detection_started_is_forgotten() {
     let mut r = Rig::with(LAYERED);
-    r.e.apply_enabled(true);
     r.link.publish_scene(SceneContext::InVehicle, None, 0.9); // nothing was looking when this was written
+    r.e.apply_enabled(true);
     assert!(r.press(&[Key::Z]).buttons.contains(&Button::CROSS));
     assert!(!r.press(&[Key::X]).buttons.contains(&Button::CROSS));
 }

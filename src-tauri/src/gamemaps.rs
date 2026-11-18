@@ -28,7 +28,6 @@ pub fn load(data: &Path) -> BTreeMap<String, String> {
 /// Set (`Some`) or clear (`None`) a game's profile and save. Returns the new map.
 pub fn set(data: &Path, key: &str, profile: Option<&str>) -> Result<BTreeMap<String, String>, String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if !valid_key(key) {
         return Err("not a game".into());
     }
@@ -53,13 +52,14 @@ pub fn set(data: &Path, key: &str, profile: Option<&str>) -> Result<BTreeMap<Str
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = path.with_extension(format!("{}.{n}.tmp", std::process::id()));
     let json = serde_json::to_vec_pretty(&map).map_err(|e| e.to_string())?;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(&tmp).map_err(|e| e.to_string())?;
     let written = f.write_all(&json).and_then(|()| f.sync_all()).and_then(|()| std::fs::rename(&tmp, &path));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -99,10 +99,13 @@ mod tests {
 
     #[test]
     fn the_file_is_private_and_a_damaged_one_is_ignored() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         set(d.path(), "CUSA1", Some("a")).unwrap();
-        assert_eq!(std::fs::metadata(file(d.path())).unwrap().permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(file(d.path())).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         std::fs::write(file(d.path()), b"{ nope").unwrap();
         assert!(load(d.path()).is_empty());
     }

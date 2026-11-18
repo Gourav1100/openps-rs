@@ -67,13 +67,16 @@ fn notice(app: Option<&AppHandle>, kind: &str, detail: String) {
 
 /// Move a damaged data file aside as `<name>.damaged-<unix time>` (owner-only) so the app can start fresh and nothing is lost.
 fn quarantine(path: &Path) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".damaged-{secs}"));
     let to = path.with_file_name(name);
     std::fs::rename(path, &to)?;
-    let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(to)
 }
 
@@ -210,13 +213,13 @@ struct VideoHandle(Arc<video::Video>);
 
 /// Choose the media sink and event sink: on macOS decode + render in a view behind the web view (when the main window
 /// exists) with sound; elsewhere, or if the video side cannot start, stats only.
-fn media_and_events(app: &AppHandle, look: openps_metal::look::SharedLook, settings: &StreamOptions) -> MediaParts {
+fn media_and_events(app: &AppHandle, _look: openps_render::look::SharedLook, _settings: &StreamOptions) -> MediaParts {
     let plain: Arc<dyn EventSink> = Arc::new(TauriSink(app.clone()));
     #[cfg(target_os = "macos")]
     {
         if let Some(window) = app.get_webview_window("main") {
             let scene = app.try_state::<input::InputState>().map(|s| s.scene_service());
-            match video::Video::install(&window, look, video::render_settings(settings), scene) {
+            match video::Video::install(&window, _look, video::render_settings(_settings), scene) {
                 Ok(v) => {
                     let v = Arc::new(v);
                     return MediaParts {
@@ -266,7 +269,7 @@ fn backend_and_psn(data_dir: &Path, secrets: Arc<dyn SecretStore + Send + Sync>)
     (Arc::new(RealBackend::new(load_tables(data_dir))), load_psn(data_dir, secrets))
 }
 
-fn build_core(app: &AppHandle, data_dir: PathBuf, look: openps_metal::look::SharedLook) -> Result<Core, String> {
+fn build_core(app: &AppHandle, data_dir: PathBuf, look: openps_render::look::SharedLook) -> Result<Core, String> {
     paths::ensure(&data_dir).map_err(|e| format!("{}: {e}", data_dir.display()))?;
     let state_path = data_dir.join("state.json");
     let store = open_or_quarantine(Some(app), &state_path, "saved consoles and settings (state.json)", || {
@@ -337,6 +340,8 @@ fn app_info(dir: State<'_, DataDir>, core: State<'_, Core>) -> serde_json::Value
       "psn_reason": PSN_REASON.get().cloned().unwrap_or_default(),
       "demo": demo_requested(),
       "hevc": hevc,
+      // physical controllers, key maps and keyboard/mouse play: only macOS has these backends so far
+      "local_input": cfg!(target_os = "macos"),
       "data_dir": dir.0.display().to_string(),
       "display_hz": display_hz(),
       "metal": metal_available(),
@@ -628,20 +633,36 @@ fn psn_sign_out(core: State<'_, Core>) -> CmdResult<()> {
 }
 
 /// Open the PSN sign-in page in its own window and finish the login when it redirects back.
+/// Async because creating a window from a synchronous command deadlocks the event loop on Windows (WebView2).
 #[tauri::command]
-fn psn_sign_in(app: AppHandle, core: State<'_, Core>) -> CmdResult<()> {
+async fn psn_sign_in(app: AppHandle, core: State<'_, Core>) -> CmdResult<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let url = core.psn_authorize_url().map_err(|e| e.to_string())?;
     if url.starts_with("demo:") {
         // demo mode: no browser window, no network; sign in instantly
         return core.psn_complete(&url).map(|_| ()).map_err(|e| e.to_string());
     }
+    // a second click while the window is open brings it forward instead of failing on the duplicate label
+    if let Some(w) = app.get_webview_window("psn-login") {
+        if w.is_visible().map_err(|e| e.to_string())? {
+            login_window_reveal(&w);
+        }
+        return Ok(());
+    }
     let parsed: tauri::Url = url.parse().map_err(|e| format!("bad sign-in URL: {e}"))?;
     let (core, handle) = (core.inner().clone(), app.clone());
-    WebviewWindowBuilder::new(&app, "psn-login", WebviewUrl::External(parsed))
+    // Keep the main-window loader until an HTTPS page loads; Sony can render its sign-in form after the load event.
+    let win = WebviewWindowBuilder::new(&app, "psn-login", WebviewUrl::External(parsed))
         .title("Sign in to PlayStation Network")
         .incognito(true) // no cookies or cache are written anywhere
         .inner_size(520.0, 720.0)
+        .visible(false)
+        .initialization_script(include_str!("psn-loading.js"))
+        .on_page_load(|w, p| {
+            if psn_login_page_ready(p.event(), p.url()) {
+                login_window_reveal(&w);
+            }
+        })
         .on_navigation(move |u| {
             let s = u.as_str().to_string();
             // Only the real redirect is ours; a URL that merely contains "code=" (error_code=, country_code=, ...) is
@@ -690,7 +711,40 @@ fn psn_sign_in(app: AppHandle, core: State<'_, Core>) -> CmdResult<()> {
         })
         .build()
         .map_err(|e| e.to_string())?;
+    let closed = app.clone();
+    win.on_window_event(move |e| {
+        if let tauri::WindowEvent::Destroyed = e {
+            let _ = closed.emit(EVENT, AppEvent::Control { kind: "psn_login_closed".into(), detail: String::new() });
+        }
+    });
+    let timeout_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        if matches!(win.is_visible(), Ok(false)) {
+            let _ = timeout_app.emit(
+                EVENT,
+                AppEvent::Control {
+                    kind: "psn_error".into(),
+                    detail: "The sign-in page did not load. Check your connection and try again.".into(),
+                },
+            );
+            let _ = win.close();
+        }
+    });
     Ok(())
+}
+
+fn psn_login_page_ready(event: tauri::webview::PageLoadEvent, url: &tauri::Url) -> bool {
+    event == tauri::webview::PageLoadEvent::Finished && url.scheme() == "https"
+}
+
+/// Show the PSN sign-in window (once its page is ready) and tell the main window to drop its loader.
+fn login_window_reveal(w: &tauri::WebviewWindow) {
+    if !w.is_visible().unwrap_or(true) {
+        let _ = w.show();
+    }
+    let _ = w.set_focus();
+    let _ = w.emit(EVENT, AppEvent::Control { kind: "psn_login_ready".into(), detail: String::new() });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -712,6 +766,7 @@ pub fn run() {
             input::input_key,
             #[cfg(target_os = "macos")]
             input::input_button,
+            #[cfg(target_os = "macos")]
             input::ps_button,
             #[cfg(target_os = "macos")]
             input::input_wheel,
@@ -737,7 +792,9 @@ pub fn run() {
             pads::controller_test,
             get_settings,
             render_stats,
+            #[cfg(target_os = "macos")]
             input::input_profiles,
+            #[cfg(target_os = "macos")]
             input::migrate_game_maps,
             frame_diagnostic,
             set_settings,
@@ -767,7 +824,9 @@ pub fn run() {
             library::launch_status,
             gamemaps::game_maps,
             gamemaps::set_game_map,
+            #[cfg(target_os = "macos")]
             input::input_profile_names,
+            #[cfg(target_os = "macos")]
             input::input_select_profile,
             psn_consoles,
             psn_sign_in
@@ -835,7 +894,7 @@ pub fn run() {
                 .build()?;
             let dir = if demo_requested() { dir.join("demo") } else { dir };
             app.manage(DataDir(dir.clone()));
-            let look = openps_metal::look::SharedLook::new(); // what we told the console the stick does; the renderer reads it
+            let look = openps_render::look::SharedLook::new(); // what we told the console the stick does; the renderer reads it
             #[cfg(target_os = "macos")]
             {
                 app.manage(input::InputState::new(app.handle(), &dir, look.clone()));
@@ -951,12 +1010,24 @@ mod default_tests {
 }
 
 #[cfg(test)]
+mod psn_login_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_finished_https_page_reveals_the_sign_in_window() {
+        use tauri::webview::PageLoadEvent;
+        assert!(!psn_login_page_ready(PageLoadEvent::Finished, &"about:blank".parse().unwrap()));
+        assert!(!psn_login_page_ready(PageLoadEvent::Started, &"https://example.test/".parse().unwrap()));
+        assert!(psn_login_page_ready(PageLoadEvent::Finished, &"https://example.test/".parse().unwrap()));
+    }
+}
+
+#[cfg(test)]
 mod damaged_file_tests {
     use super::*;
 
     #[test]
     fn a_damaged_state_file_is_set_aside_and_the_app_starts_fresh() {
-        use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("state.json");
         for (i, junk) in [&b""[..], b"{ truncated", b"<<<<<<< HEAD", b"[1,2]"].into_iter().enumerate() {
@@ -971,7 +1042,11 @@ mod damaged_file_tests {
             assert!(!kept.is_empty(), "case {i}: the damaged file must be kept");
             for k in &kept {
                 assert!(std::fs::read(k.path()).unwrap().len() <= 16);
-                assert_eq!(std::fs::metadata(k.path()).unwrap().permissions().mode() & 0o777, 0o600);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(std::fs::metadata(k.path()).unwrap().permissions().mode() & 0o777, 0o600);
+                }
             }
             let _ = std::fs::remove_file(&p);
         }
