@@ -2,6 +2,8 @@
 **
 !Cargo.toml
 !Cargo.lock
+# Required by tests/build-scripts.test.js inside linux-test.
+!build-all.sh
 !.cargo/
 !.cargo/config.toml
 !crates/

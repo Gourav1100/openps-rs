@@ -16,6 +16,7 @@ const WINDOW: Bounds = (100.0, 200.0, 800.0, 600.0);
 
 #[derive(Default)]
 struct Shared {
+    focused: Option<bool>,
     held: BTreeSet<Input>,
     pads: Vec<ControllerState>,
     overlay: Vec<OverlayState>,
@@ -25,7 +26,7 @@ struct Mock(S);
 
 impl Platform for Mock {
     fn is_frontmost(&mut self, _: &str) -> bool {
-        true
+        self.0.borrow().focused.unwrap_or(true)
     }
     fn window_bounds(&mut self, _: &str) -> Option<Bounds> {
         Some(WINDOW)
@@ -535,4 +536,19 @@ fn malformed_scene_events_are_ignored() {
     assert!(UiEvent::from_json(&serde_json::json!({"type": "label"})).is_none());
     assert!(UiEvent::from_json(&serde_json::json!({"type": "label", "control": "CROSS", "label": 5})).is_none());
     let _ = MouseInput::MOUSE_LEFT;
+}
+
+#[test]
+fn focus_loss_invalidates_inference_before_the_next_scene_poll() {
+    let mut r = Rig::with(LAYERED);
+    r.e.apply_enabled(true);
+    let generation = r.link.generation();
+    r.link.publish_scene(SceneContext::InVehicle, None, 0.9);
+    r.s.borrow_mut().focused = Some(false);
+    r.e.poll_window();
+    assert!(!r.link.running());
+    assert_eq!(r.link.layer(), Layer::OnFoot);
+    r.s.borrow_mut().focused = Some(true);
+    r.e.poll_window();
+    assert!(!r.link.publish_if_current(generation, r.link.now(), SceneContext::InVehicle, None, 0.9));
 }
